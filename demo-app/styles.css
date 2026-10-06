@@ -1,0 +1,60 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: #0b0b0e;
+  color: #c4c4d0;
+  font:
+    13px -apple-system,
+    system-ui,
+    sans-serif;
+}
+
+.demo {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+}
+
+.demo__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1c1c24;
+  background: #101015;
+}
+
+.demo__bar button,
+.demo__bar select {
+  padding: 4px 10px;
+  border: 1px solid #2a2a36;
+  border-radius: 6px;
+  background: #1a1a22;
+  color: #e6e6ee;
+  font: inherit;
+  cursor: pointer;
+}
+
+.demo__hud {
+  flex-basis: 100%;
+  color: #8a8a96;
+  font:
+    12px ui-monospace,
+    monospace;
+}
+
+.demo__stage {
+  position: relative;
+  min-height: 0;
+}
+
+.demo__side {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}

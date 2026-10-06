@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Canvas Graph Spike</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0b0e;overflow:hidden;font-family:-apple-system,system-ui,sans-serif}
+  canvas{display:block;width:100vw;height:100vh;cursor:grab}
+  canvas.drag{cursor:grabbing}
+  #opts{position:fixed;right:12px;top:12px;color:#c4c4d0;font:13px -apple-system,system-ui,sans-serif;background:#14141acc;padding:8px 12px;border-radius:8px;user-select:none;display:flex;flex-direction:column;gap:6px}
+  #opts label{cursor:pointer}
+  #opts select{background:#1a1a22;color:#e6e6ee;border:1px solid #2a2a36;border-radius:6px;padding:2px 6px;margin-left:4px}
+  #opts span{color:#6d6d7a}
+  #opts input{vertical-align:-2px;margin-right:6px}
+  #hud{position:fixed;left:12px;top:12px;color:#8a8a96;font:12px/1.5 ui-monospace,monospace;background:#14141acc;padding:8px 10px;border-radius:8px;pointer-events:none;white-space:pre}
+  #edgepanel{position:fixed;right:12px;top:92px;width:272px;box-sizing:border-box;color:#c4c4d0;font:13px -apple-system,system-ui,sans-serif;background:#14141aee;padding:12px 14px;border-radius:10px;border:1px solid #262630}
+  #edgepanel[hidden]{display:none}
+  #edgepanel .t{font-weight:600;color:#f1f1f6;margin-bottom:8px}
+  #edgepanel .r{display:flex;justify-content:space-between;gap:12px;padding:4px 0;border-top:1px solid #1f1f28}
+  #edgepanel .r span{color:#6d6d7a;white-space:nowrap}
+  #edgepanel .r b{font-weight:500;text-align:right;word-break:break-word}
+  #edgepanel button{margin-top:10px;width:100%;padding:8px;border-radius:8px;border:1px solid #5a2630;background:#2a1519;color:#ff8a98;font:600 13px -apple-system,system-ui,sans-serif;cursor:pointer}
+  #edgepanel button:hover{background:#3a1b21}
+  #edgepanel kbd{opacity:.6;font:12px ui-monospace,monospace;margin-left:6px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div id="edgepanel" hidden>
+  <div class="t" id="ep-title"></div>
+  <div id="ep-rows"></div>
+  <div id="ep-actions"></div>
+</div>
+<div id="opts">
+  <label><input type="checkbox" id="full"> Full path selection <span>(F)</span></label>
+  <label>Simulated save <select id="save"><option value="slow">slow (1.5s)</option><option value="fail">slow, then fails</option><option value="instant">instant</option></select></label>
+</div>
+<script>
+// ---------- model ----------
+const COLOR = { source:'#ffd24a', switch:'#ff7a59', process:'#b05cff', storage:'#2fe6e6', gpu:'#ff4fa3',
+  aggregator:'#6ee7a0', sink:'#5aa9ff', ingest:'#ffd24a', route:'#ff7a59', enrich:'#b05cff', relay:'#2fe6e6', store:'#5aa9ff', parse:'#ff4fa3' };
+const nodes = [], edges = [], comps = [];
+const pendingEdges = new Set(); let pulseUntil = 0; // connections created by a gesture that the host hasn't confirmed yet
+let gconn = null, edgeSeq = 0, selGE = null, hoverGE = null, selGroup = null; // selected / hovered group pipe, selected group
+let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+function N(comp, type, name) {
+  const n = { id: nodes.length, comp, type, name, x: 0, y: 0, w: 200, h: 84, in: [], out: [], ins: [], outs: [], g: null, layer: 0,
+    gl: 0, status: rnd() < .06 ? 'degraded' : 'ready', hi: 0, ho: 0, stamp: 0 };
+  nodes.push(n); comp.nodes.push(n); return n;
+}
+function E(a, b, ap = 'A', bp = '1') { const e = { id: edgeSeq++, a, b, fp: portNamed(a, 'out', ap), tp: portNamed(b, 'in', bp), ai: 0, bi: 0, back: false, enabled: true, stamp: 0 }; edges.push(e); a.out.push(e); b.in.push(e); }
+function portNamed(n, side, name) { // demo data only: a real graph brings its own port objects
+  const list = side === 'out' ? n.outs : n.ins; let p = list.find(x => x.name === name);
+  if (!p) { p = { id: `${n.id}:${side}:${name}`, name }; list.push(p); } return p;
+}
+
+// 10 -> 1 -> N -> 1 -> 5
+function pipelineA(nProc) {
+  const c = { nodes: [], name: `fan ${nProc}` }; comps.push(c);
+  const src = Array.from({ length: 10 }, (_, i) => N(c, 'source', `Source ${i}`));
+  const sw = N(c, 'switch', 'Switch');
+  const procs = Array.from({ length: nProc }, (_, i) => N(c, rnd() < .6 ? 'process' : rnd() < .6 ? 'storage' : 'gpu', `Asset ${i}`));
+  const agg = N(c, 'aggregator', 'Aggregator');
+  const out = Array.from({ length: 5 }, (_, i) => N(c, 'sink', `Sink ${i}`));
+  src.forEach((s, i) => E(s, sw, 'A', String(i + 1))); procs.forEach(p => { E(sw, p); E(p, agg); }); out.forEach((o, i) => E(agg, o, 'ABCDE'[i]));
+}
+// a1-a2-a3-(fan)-a4-a5-a2(back)  a2-a6-a7-a8
+function pipelineB(nPar) {
+  const c = { nodes: [], name: `loop ${nPar}` }; comps.push(c);
+  const a = (t, i) => N(c, t, `a${i}`);
+  const a1 = a('source', 1), a2 = a('ingest', 2), a3 = a('route', 3), a4 = a('relay', 4), a5 = a('store', 5),
+        a6 = a('aggregator', 6), a7 = a('process', 7), a8 = a('sink', 8);
+  const par = Array.from({ length: nPar }, (_, i) => N(c, 'enrich', `par ${i}`));
+  E(a1, a2); E(a2, a3); par.forEach(p => { E(a3, p); E(p, a4); }); E(a4, a5); E(a5, a2, 'A', '2'); E(a2, a6, 'B'); E(a6, a7); E(a7, a8);
+}
+// your example: a4 has 3 outputs (a5, a6, loop back to a2) plus a skip edge a1 -> a4
+function pipelineC() {
+  const c = { nodes: [], name: 'branch' }; comps.push(c);
+  const a = (t, i) => N(c, t, `a${i}`);
+  const a1 = a('source', 1), a2 = a('ingest', 2), a3 = a('route', 3), a4 = a('relay', 4), a5 = a('store', 5), a6 = a('sink', 6);
+  E(a1, a2); E(a2, a3); E(a3, a4); E(a4, a5, 'A'); E(a4, a6, 'B'); E(a4, a2, 'C', '2'); E(a1, a4, 'B', '2');
+}
+pipelineC(); pipelineA(800); pipelineB(40); pipelineA(400); pipelineB(150);
+
+const PORT_Y0 = 62, PORT_DY = 20;
+const natural = (p, q) => (isNaN(p) || isNaN(q)) ? String(p).localeCompare(q) : p - q;
+const byName = (p, q) => natural(p.name, q.name) || String(p.id).localeCompare(String(q.id));
+function finalizePorts() {
+  for (const n of nodes) {
+    n.ins.sort(byName); n.outs.sort(byName);
+    n.h = PORT_Y0 + PORT_DY * Math.max(1, n.ins.length, n.outs.length) + 22;
+  }
+  for (const e of edges) { e.ai = e.a.outs.indexOf(e.fp); e.bi = e.b.ins.indexOf(e.tp); }
+}
+finalizePorts();
+const portY = (n, k) => n.y + PORT_Y0 + k * PORT_DY;
+
+// ---------- layout: break cycles, layer, group by (layer,type) ----------
+const GAP_LAYER = 420, GAP_GROUP = 80; // frame-to-frame distance between columns / stacked groups
+const PAD = 40, CW = 230, CH = 110, groups = [], gedges = [];
+function layout() {
+  groups.length = 0; for (const n of nodes) { n.layer = 0; n.g = null; } for (const e of edges) e.back = false; // idempotent: relayout() runs this again
+  const st = new Int8Array(nodes.length);
+  let compTop = 0;
+  for (const c of comps) {
+    // cycle breaking (iterative DFS; edges into a node on the stack are back edges)
+    const roots = c.nodes.filter(n => !n.in.length).concat(c.nodes);
+    for (const r of roots) {
+      if (st[r.id]) continue; st[r.id] = 1;
+      const stack = [[r, 0]];
+      while (stack.length) {
+        const top = stack[stack.length - 1], n = top[0];
+        if (top[1] < n.out.length) {
+          const e = n.out[top[1]++], m = e.b;
+          if (st[m.id] === 1) e.back = true; else if (!st[m.id]) { st[m.id] = 1; stack.push([m, 0]); }
+        } else { st[n.id] = 2; stack.pop(); }
+      }
+    }
+    // longest-path layering over non-back edges
+    const deg = new Map(c.nodes.map(n => [n, n.in.filter(e => !e.back).length]));
+    const q = c.nodes.filter(n => deg.get(n) === 0);
+    while (q.length) {
+      const n = q.pop();
+      for (const e of n.out) if (!e.back) { const m = e.b; m.layer = Math.max(m.layer, n.layer + 1); deg.set(m, deg.get(m) - 1); if (!deg.get(m)) q.push(m); }
+    }
+    // group by (layer,type)
+    const gm = new Map(), layers = [];
+    for (const n of c.nodes) {
+      const k = n.layer + '|' + n.type; let g = gm.get(k);
+      if (!g) { g = { id: groups.length, comp: c, layer: n.layer, type: n.type, nodes: [], x: 0, y: 0, w: 0, h: 0, rows: 1 }; groups.push(g); gm.set(k, g); (layers[n.layer] ||= []).push(g); }
+      g.nodes.push(n); n.g = g;
+    }
+    for (const g of groups.filter(g => g.comp === c)) {
+      const cnt = g.nodes.length; g.mh = Math.max(...g.nodes.map(n => n.h)); g.rh = g.mh + 30; g.rows = Math.max(1, Math.ceil(Math.sqrt(cnt * CW / g.rh)));
+      const cols = Math.ceil(cnt / g.rows);
+      g.w = (cols - 1) * CW + 200; g.h = (Math.min(cnt, g.rows) - 1) * g.rh + g.mh;
+    }
+    // positions: layers left to right, groups stacked and centered
+    // spine: the largest group per layer sits on the baseline, siblings stack below it
+    layers.forEach(L => L.sort((p, q) => q.nodes.length - p.nodes.length || p.id - q.id));
+    const base = Math.max(...layers.map(L => L[0].h / 2 + PAD));
+    const below = Math.max(...layers.map(L => L[0].h / 2 + PAD + L.slice(1).reduce((s, g) => s + g.h + 2 * PAD + GAP_GROUP, 0)));
+    const compH = base + below; let x = 0;
+    layers.forEach(L => {
+      const lw = Math.max(...L.map(g => g.w)); let y = compTop + base - L[0].h / 2;
+      for (const g of L) {
+        g.x = x + (lw - g.w) / 2; g.y = y;
+        g.nodes.forEach((n, i) => { n.x = g.x + Math.floor(i / g.rows) * CW; n.y = g.y + (i % g.rows) * g.rh; });
+        y += g.h + 2 * PAD + GAP_GROUP;
+      }
+      x += lw + 2 * PAD + GAP_LAYER;
+    });
+    c.bbox = { x: -PAD, y: compTop, w: x - GAP_LAYER, h: compH }; c.bbox0 = { y: compTop, h: compH };
+    compTop += compH + 1600;
+  }
+}
+function routeEdges() {
+  gedges.length = 0;
+  const gm = new Map();
+  for (const e of edges) {
+    const k = e.a.g.id + (e.back ? '<' : '>') + e.b.g.id; let ge = gm.get(k);
+    if (!ge) { ge = { a: e.a.g, b: e.b.g, count: 0, back: e.back, skip: !e.back && e.b.layer - e.a.layer > 1, laneY: undefined, edges: [] }; gm.set(k, ge); gedges.push(ge); }
+    ge.count++; ge.edges.push(e); e.ge = ge;
+  }
+  // loops route over the top, layer-skipping edges underneath, in stacked non-overlapping lanes
+  for (const c of comps) {
+    const cg = groups.filter(g => g.comp === c);
+    let top = c.bbox0.y, bot = c.bbox0.y + c.bbox0.h;
+    for (const side of ['back', 'skip']) {
+      const list = gedges.filter(ge => ge.a.comp === c && ge[side])
+        .map(ge => ({ ge, lo: Math.min(ge.a.layer, ge.b.layer), hi: Math.max(ge.a.layer, ge.b.layer) }))
+        .sort((p, q) => (p.hi - p.lo) - (q.hi - q.lo));
+      const lanes = [];
+      for (const it of list) {
+        let k = lanes.findIndex(L => L.every(o => o.hi < it.lo || o.lo > it.hi));
+        if (k < 0) { k = lanes.length; lanes.push([]); }
+        lanes[k].push(it);
+        const span = cg.filter(g => g.layer >= it.lo && g.layer <= it.hi);
+        it.ge.laneY = side === 'back' ? Math.min(...span.map(g => g.y - PAD)) - 140 - k * 140
+                                      : Math.max(...span.map(g => g.y + g.h + PAD)) + 140 + k * 140;
+        top = Math.min(top, it.ge.laneY - 60); bot = Math.max(bot, it.ge.laneY + 60);
+      }
+    }
+    c.bbox.y = top; c.bbox.h = bot - top;
+  }
+  const same = g => g && gedges.find(x => x.a.nodes[0] === g.a.nodes[0] && x.b.nodes[0] === g.b.nodes[0] && x.back === g.back) || null;
+  selGE = same(selGE); hoverGE = same(hoverGE);
+}
+layout(); routeEdges();
+
+function addEdgeRaw(a, ai, b, bi, enabled = true) { // egress port #ai of a -> ingress port #bi of b; caller routes
+  const fp = a.outs[ai], tp = b.ins[bi];
+  if (!fp || !tp || a === b || a.out.some(e => e.b === b && e.fp === fp && e.tp === tp)) return null;
+  const e = { id: edgeSeq++, a, b, fp, tp, ai, bi, back: b.layer <= a.layer, enabled, stamp: 0 };
+  edges.push(e); a.out.push(e); b.in.push(e); return e;
+}
+let needRelayout = false;
+function ensurePort(n, side, spec) { // spec: a port id, or { id, name }. The host owns ports; an unseen one is added to the card.
+  const want = typeof spec === 'object' ? spec : { id: spec, name: String(spec) }, list = side === 'out' ? n.outs : n.ins;
+  let p = list.find(x => x.id === want.id);
+  if (p) return p;
+  p = { id: want.id, name: want.name ?? String(want.id) }; list.push(p); list.sort(byName);
+  for (const e of n.out) e.ai = n.outs.indexOf(e.fp); for (const e of n.in) e.bi = n.ins.indexOf(e.tp);
+  const h = PORT_Y0 + PORT_DY * Math.max(1, n.ins.length, n.outs.length) + 22;
+  if (h > n.h) { n.h = h; if (h > n.g.mh) needRelayout = true; } // taller than its grid cell: positions must be recomputed
+  return p;
+}
+function addEdgeByPort(a, fromPort, b, toPort, enabled = true) {
+  if (!a || !b || a === b || fromPort == null || toPort == null) return null;
+  const fp = ensurePort(a, 'out', fromPort), tp = ensurePort(b, 'in', toPort);
+  return addEdgeRaw(a, a.outs.indexOf(fp), b, b.ins.indexOf(tp), enabled);
+}
+function connect(a, ai, b, bi) { const e = addEdgeRaw(a, ai, b, bi); if (e) routeEdges(); return e; }
+
+// spatial grid for culling / picking
+const CELL = 800, grid = new Map(), gk = (cx, cy) => cx * 100003 + cy;
+function buildGrid() {
+  grid.clear();
+  for (const n of nodes)
+    for (let cx = Math.floor(n.x / CELL); cx <= Math.floor((n.x + n.w) / CELL); cx++)
+      for (let cy = Math.floor(n.y / CELL); cy <= Math.floor((n.y + n.h) / CELL); cy++) {
+        const k = gk(cx, cy); (grid.get(k) || grid.set(k, []).get(k)).push(n);
+      }
+}
+buildGrid();
+function queryNodes(x0, y0, x1, y1) {
+  const out = new Set();
+  for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++)
+    for (let cy = Math.floor(y0 / CELL); cy <= Math.floor(y1 / CELL); cy++) { const b = grid.get(gk(cx, cy)); if (b) for (const n of b) out.add(n); }
+  return out;
+}
+function pick(x, y) {
+  const b = grid.get(gk(Math.floor(x / CELL), Math.floor(y / CELL)));
+  if (b) for (const n of b) if (x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h) return n;
+  return null;
+}
+
+// ---------- selection (upstream + downstream) ----------
+const selNodes = new Set(), selGroups = new Set(), selEdges = new Set();
+let selected = null, hover = null, fullPath = false;
+function computeSel(n) {
+  selNodes.clear(); selGroups.clear(); selEdges.clear(); selected = n; if (!n) return;
+  for (const dir of ['out', 'in']) {
+    const seen = new Set([n]), q = [[n, fullPath ? Infinity : 1]]; // direct neighbours only unless full path is on
+    while (q.length) {
+      const [m, left] = q.pop(); if (left <= 0) continue;
+      for (const e of m[dir]) { selEdges.add(e); const o = dir === 'out' ? e.b : e.a; if (!seen.has(o)) { seen.add(o); q.push([o, left - 1]); } }
+    }
+    for (const m of seen) selNodes.add(m);
+  }
+  for (const m of selNodes) selGroups.add(m.g);
+}
+
+// ---------- view / input ----------
+const cv = document.getElementById('c'), ctx = cv.getContext('2d'), hud = document.getElementById('hud');
+const DPR = Math.min(devicePixelRatio || 1, 2);
+let W, H, dirty = true, time = 0, mouse = { x: 0, y: 0 }, drag = null;
+const view = { x: 0, y: 0, s: .04 };
+let ts = .04, ax = 0, ay = 0, wx = 0, wy = 0; // target scale + anchor (screen point <-> world point)
+const toWorld = (px, py) => ({ x: px / view.s + view.x, y: py / view.s + view.y });
+const syncAnchor = () => { const p = toWorld(ax, ay); wx = p.x; wy = p.y; };
+function resize() { W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; dirty = true; }
+addEventListener('resize', resize); resize();
+function focus(b) {
+  ts = Math.min(2.2, Math.min(W / (b.w + 400), H / (b.h + 400))); ax = W / 2; ay = H / 2; wx = b.x + b.w / 2; wy = b.y + b.h / 2; dirty = true;
+}
+{ const xs = comps.map(c => c.bbox), x1 = Math.max(...xs.map(b => b.x + b.w)), y1 = Math.max(...xs.map(b => b.y + b.h));
+  focus({ x: 0, y: 0, w: x1, h: y1 }); view.s = ts; view.x = wx - ax / ts; view.y = wy - ay / ts; }
+
+cv.addEventListener('wheel', e => {
+  e.preventDefault(); ax = e.clientX; ay = e.clientY; const v = { ...view }; syncAnchor();
+  ts = Math.min(2.2, Math.max(.012, ts * Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0018)))); dirty = true;
+}, { passive: false });
+let conn = null, retract = null, flash = null; // live drag wire, snap-back animation, connect flash
+let selEdge = null, hoverEdge = null, ghost = null, pickStamp = 0; const undo = []; // selected/hovered wire, fading deleted wire, deleted wires
+function segDist(x, y, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / l2)) : 0;
+  return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
+}
+function pickEdge(x, y, vis) { // nearest wire within 9px of the cursor, among wires touching visible cards
+  const tol = 9 / view.s, stamp = ++pickStamp; let best = null, bd = tol;
+  for (const n of vis) for (const list of [n.out, n.in]) for (const e of list) {
+    if (e.pstamp === stamp) continue; e.pstamp = stamp;
+    const A = e.a, B = e.b, x0 = A.x + A.w, x1 = B.x, y0 = portY(A, e.ai), y1 = portY(B, e.bi), ly = e.ge.laneY;
+    let lo = Math.min(y0, y1), hi = Math.max(y0, y1); if (ly !== undefined) { lo = Math.min(lo, ly); hi = Math.max(hi, ly); }
+    if (x < Math.min(x0, x1) - 80 - tol || x > Math.max(x0, x1) + 80 + tol || y < lo - tol || y > hi + tol) continue;
+    const pts = sampleSegs(edgeSegs(e), 32);
+    for (let i = 1; i < pts.length; i++) { const d = segDist(x, y, pts[i - 1], pts[i]); if (d < bd) { bd = d; best = e; } }
+  }
+  return best;
+}
+// ---------- host API: the canvas emits plain-data events and exposes commands; the panel below is just one subscriber ----------
+const listeners = {}, $ = id => document.getElementById(id), panel = $('edgepanel');
+function emit(type, data) { for (const fn of listeners[type] || []) fn(data); }
+const gsum = g => ({ id: g.id, type: g.type, layer: g.layer, count: g.nodes.length });
+const routeOf = (a, b, back, skip) => back ? 'loop back' : skip ? `skips ${b.layer - a.layer - 1} layer(s)` : 'forward';
+const hist = (list, key) => { const m = new Map(); for (const e of list) m.set(e[key].name, (m.get(e[key].name) || 0) + 1); return [...m].map(([name, count]) => ({ name, count })).sort((p, q) => q.count - p.count); }; // by port NAME across a group; ids differ per asset
+const pinfo = p => ({ id: p.id, name: p.name });
+const endpoint = (n, port) => ({ id: n.id, name: n.name, type: n.type, port: pinfo(port) });
+function describeNode(n) {
+  return { kind: 'node', id: n.id, name: n.name, type: n.type, layer: n.layer, status: n.status, group: gsum(n.g), inCount: n.in.length, outCount: n.out.length,
+    ingressPorts: n.ins.map(p => ({ ...pinfo(p), count: n.in.filter(e => e.tp === p).length })), egressPorts: n.outs.map(p => ({ ...pinfo(p), count: n.out.filter(e => e.fp === p).length })) };
+}
+const describeEdge = e => ({ kind: 'edge', id: e.id, from: endpoint(e.a, e.fp), to: endpoint(e.b, e.tp), route: routeOf(e.a, e.b, e.back, e.ge.skip), enabled: e.enabled !== false, pending: !!e.pending, fromGroup: gsum(e.a.g), toGroup: gsum(e.b.g) });
+const describeGE = ge => ({ kind: 'groupEdge', from: gsum(ge.a), to: gsum(ge.b), count: ge.edges.length, route: routeOf(ge.a, ge.b, ge.back, ge.skip),
+  egressPorts: hist(ge.edges, 'fp'), ingressPorts: hist(ge.edges, 'tp'), enabled: ge.edges.filter(e => e.enabled !== false).length, edgeIds: ge.edges.map(e => e.id) });
+function describeGroup(g) {
+  const out = gedges.filter(x => x.a === g).map(x => ({ ...gsum(x.b), edges: x.edges.length })), inn = gedges.filter(x => x.b === g).map(x => ({ ...gsum(x.a), edges: x.edges.length }));
+  return { kind: 'group', ...gsum(g), degraded: g.nodes.filter(n => n.status === 'degraded').length, nodeIds: g.nodes.map(n => n.id), outgoing: out, incoming: inn };
+}
+function payload() {
+  if (selEdge) return describeEdge(selEdge); if (selGE) return describeGE(selGE); if (selGroup) return describeGroup(selGroup); if (selected) return describeNode(selected); return null;
+}
+function select(sel) { // sel: null | { node } | { edge } | { ge } | { group }
+  sel = sel || {}; computeSel(sel.node || null); selEdge = sel.edge || null; selGE = sel.ge || null; selGroup = sel.group || null;
+  dirty = true; emit('select', payload());
+}
+function afterChange(reason, added, removed) {
+  if (selEdge && removed.includes(selEdge.id)) selEdge = null;
+  hoverEdge = null; computeSel(selected); dirty = true;
+  emit('change', { reason, added, removed }); emit('select', payload());
+}
+const edgeById = () => new Map(edges.map(e => [e.id, e]));
+function removeEdges(items, record = true) { // edge objects or ids; one undo step for the whole batch
+  const byId = edgeById(), list = items.map(x => typeof x === 'number' ? byId.get(x) : x).filter(Boolean);
+  if (!list.length) return 0;
+  if (list.length === 1) ghost = { segs: edgeSegs(list[0]), color: COLOR[list[0].a.type], t0: time };
+  for (const e of list) pendingEdges.delete(e);
+  const gone = new Set(list), recs = list.map(e => ({ a: e.a, fp: e.fp, b: e.b, tp: e.tp, enabled: e.enabled })); // ports, not indices: they can be re-sorted
+  let w = 0; for (const e of edges) if (!gone.has(e)) edges[w++] = e; edges.length = w;
+  for (const n of new Set(list.flatMap(e => [e.a, e.b]))) { n.out = n.out.filter(e => !gone.has(e)); n.in = n.in.filter(e => !gone.has(e)); }
+  routeEdges(); if (record) undo.push({ type: 'remove', recs });
+  afterChange('remove', [], list.map(e => e.id)); return list.length;
+}
+function connectMany(specs, record = true) { // [{ from: assetId, fromPort: portId | {id, name}, to: assetId, toPort: portId | {id, name} }]
+  const created = [], skipped = [];
+  specs.forEach((sp, i) => {
+    const e = addEdgeByPort(nodeById.get(sp.from), sp.fromPort, nodeById.get(sp.to), sp.toPort, sp.enabled !== false);
+    if (e) created.push(e); else skipped.push(i);
+  });
+  if (created.length) { if (needRelayout) { needRelayout = false; relayout('ports'); } else routeEdges(); if (record) undo.push({ type: 'add', edges: created }); afterChange('add', created.map(e => e.id), []); }
+  return { created: created.map(e => e.id), skipped };
+}
+function relayout(reason = 'manual') { // recompute layers, groups and positions (camera stays put)
+  bumping.clear(); for (const n of nodes) { n.x0 = undefined; n.bt = null; }
+  layout(); routeEdges(); buildGrid();
+  if (selGroup) selGroup = selGroup.nodes[0].g;
+  hoverEdge = null; dirty = true; emit('layout', { reason }); emit('select', payload());
+}
+function requestConnect(e) { // a port-to-port drag: the wire is already drawn (faded); ask the host to save it
+  e.pending = true; pendingEdges.add(e);
+  const req = { from: { assetIds: [e.a.id], port: pinfo(e.fp) }, to: { assetIds: [e.b.id], port: pinfo(e.tp) }, cardinality: 'one-to-one', source: 'port-drag', existingLinks: 0, edgeId: e.id };
+  const hosts = [...(listeners.connectRequest || [])].filter(fn => !fn.builtin);
+  if (!hosts.length) return settle(e, true); // nobody is listening (no backend): nothing to wait for
+  const waits = hosts.map(fn => fn(req)).filter(r => r && typeof r.then === 'function');
+  if (waits.length) Promise.all(waits).then(() => settle(e, true), () => settle(e, false)); // else the host calls graph.confirm / graph.revert
+}
+function settle(e, ok) {
+  if (!pendingEdges.has(e)) return; pendingEdges.delete(e);
+  if (ok) { e.pending = false; e.ct = time; pulseUntil = time + .5; dirty = true; emit('select', payload()); return; }
+  for (let i = undo.length - 1; i >= 0; i--) if (undo[i].type === 'add' && undo[i].edges.every(x => x === e)) undo.splice(i, 1);
+  removeEdges([e], false);
+}
+const edgesOf = ids => { const m = edgeById(); return [].concat(ids).map(id => m.get(id)).filter(Boolean); };
+function undoLast() {
+  const u = undo.pop(); if (!u) return false;
+  if (u.type === 'add') { const live = new Set(edges); removeEdges(u.edges.filter(e => live.has(e)), false); return true; }
+  const made = u.recs.map(r => addEdgeByPort(r.a, r.fp, r.b, r.tp, r.enabled)).filter(Boolean);
+  if (needRelayout) { needRelayout = false; relayout('ports'); } else routeEdges(); afterChange('undo', made.map(e => e.id), []);
+  if (made.length === 1) { flash = { e: made[0], t0: time, node: made[0].b, dir: 1, idx: made[0].bi }; select({ edge: made[0] }); }
+  return true;
+}
+const nodeById = new Map(nodes.map(n => [n.id, n]));
+const graph = window.graph = {
+  defaultPanel: true,
+  on(type, fn) { (listeners[type] ||= new Set()).add(fn); return () => listeners[type].delete(fn); }, // 'select' (payload | null), 'change' ({ reason, added, removed })
+  get selection() { return payload(); },
+  clearSelection() { select(null); },
+  removeEdges: ids => removeEdges(ids), connectMany: specs => connectMany(specs), undo: undoLast, relayout: () => relayout('manual'), confirm: ids => edgesOf(ids).forEach(e => settle(e, true)), revert: ids => edgesOf(ids).forEach(e => settle(e, false)),
+};
+
+// ---------- default detail panel (replace it by setting graph.defaultPanel = false and subscribing to 'select') ----------
+const TITLE = { node: 'Asset', edge: 'Connection', groupEdge: 'Group connections', group: 'Group' };
+let armed = null;
+const grp = x => `${x.type} ×${x.count} · layer ${x.layer}`;
+const plist = a => a.length ? a.slice(0, 4).map(x => `${x.name} ×${x.count}`).join(', ') + (a.length > 4 ? ` +${a.length - 4}` : '') : 'none';
+function renderPanel(p) {
+  panel.hidden = !p || !graph.defaultPanel; armed = null; if (panel.hidden) return;
+  let rows = [], acts = [];
+  if (p.kind === 'edge') {
+    rows = [['From', `${p.from.name} · ${p.from.type}`], ['Egress port', p.from.port.name], ['To', `${p.to.name} · ${p.to.type}`], ['Ingress port', p.to.port.name], ['Route', p.route], ['Groups', `${p.fromGroup.type} ×${p.fromGroup.count} → ${p.toGroup.type} ×${p.toGroup.count}`], ['State', p.pending ? 'pending (saving…)' : p.enabled ? 'enabled' : 'disabled']];
+    acts = [{ label: 'Delete connection', hint: 'Del', run: () => removeEdges([p.id]) }];
+  } else if (p.kind === 'groupEdge') {
+    rows = [['From', grp(p.from)], ['To', grp(p.to)], ['Connections', String(p.count)], ['Route', p.route], ['Egress ports', plist(p.egressPorts)], ['Ingress ports', plist(p.ingressPorts)], ['State', `${p.enabled} enabled, ${p.count - p.enabled} disabled`]];
+    acts = [{ label: `Delete all ${p.count} connections`, confirm: true, run: () => removeEdges(p.edgeIds) }];
+  } else if (p.kind === 'group') {
+    rows = [['Type', p.type], ['Layer', String(p.layer)], ['Assets', String(p.count)], ['Degraded', String(p.degraded)], ['Outgoing', p.outgoing.length ? p.outgoing.map(o => `${o.type} ×${o.count} (${o.edges})`).join(', ') : 'none'], ['Incoming', p.incoming.length ? p.incoming.map(o => `${o.type} ×${o.count} (${o.edges})`).join(', ') : 'none']];
+  } else {
+    rows = [['Asset', p.name], ['Type', p.type], ['Layer', String(p.layer)], ['Status', p.status], ['Group', `${p.group.type} ×${p.group.count}`], ['Ingress', `${p.inCount} on ${plist(p.ingressPorts)}`], ['Egress', `${p.outCount} on ${plist(p.egressPorts)}`]];
+  }
+  $('ep-title').textContent = TITLE[p.kind];
+  $('ep-rows').replaceChildren(...rows.map(([l, v]) => { const r = document.createElement('div'), a = document.createElement('span'), b = document.createElement('b'); r.className = 'r'; a.textContent = l; b.textContent = v; r.append(a, b); return r; }));
+  $('ep-actions').replaceChildren(...acts.map(a => {
+    const btn = document.createElement('button'), label = a.label; btn.textContent = label;
+    if (a.hint) { const k = document.createElement('kbd'); k.textContent = a.hint; btn.append(k); }
+    btn.addEventListener('click', () => {
+      if (a.confirm && armed !== btn) { armed = btn; btn.textContent = `Click again to confirm: ${label}`; setTimeout(() => { if (armed === btn) { armed = null; btn.textContent = label; } }, 3000); return; }
+      a.run();
+    });
+    return btn;
+  }));
+}
+graph.on('select', renderPanel);
+
+// ---------- picking: wires at near zoom, group pipes + groups when zoomed out ----------
+function geSegs(ge) {
+  const A = ge.a, B = ge.b, y0 = A.y + A.h / 2, y1 = B.y + B.h / 2, x0 = A.x + A.w + PAD, x1 = B.x - PAD;
+  return ge.laneY === undefined ? fwdSegs(x0, y0, x1, y1) : loopSegs(x0, y0, x1, y1, ge.laneY, 190, 100);
+}
+const pipePxN = n => Math.min(16, 1.5 + Math.log2(n + 1) * 1.3), pipePx = ge => pipePxN(ge.edges.length);
+function pickGroupEdge(x, y) {
+  let best = null, bd = Infinity;
+  for (const ge of gedges) {
+    const tol = Math.max(10, pipePx(ge) / 2 + 4) / view.s, pts = sampleSegs(geSegs(ge), 40);
+    for (let i = 1; i < pts.length; i++) { const d = segDist(x, y, pts[i - 1], pts[i]); if (d < tol && d < bd) { bd = d; best = ge; } }
+  }
+  return best;
+}
+function pickGroup(x, y) {
+  let best = null, ba = Infinity; const mn = 10 / view.s;
+  for (const g of groups) {
+    const w = Math.max(g.w + 2 * PAD, mn), h = Math.max(g.h + 2 * PAD, mn), x0 = g.x + g.w / 2 - w / 2, y0 = g.y + g.h / 2 - h / 2;
+    if (x >= x0 && x <= x0 + w && y >= y0 && y <= y0 + h && w * h < ba) { ba = w * h; best = g; }
+  }
+  return best;
+}
+function pickGroupHandle(x, y) {
+  const r = 14 / view.s; let best = null, bd = r;
+  for (const g of groups) {
+    const hy = g.y + g.h / 2;
+    for (const [hx, dir] of [[g.x + g.w + PAD, 1], [g.x - PAD, -1]]) { const d = Math.hypot(hx - x, hy - y); if (d < bd) { bd = d; best = { group: g, dir }; } }
+  }
+  return best;
+}
+function drawGroupConn() { // the fat pipe following the cursor; locks onto the target group's facing handle
+  const s = view.s, c = gconn, g = c.from, col = COLOR[g.type], hx = c.dir > 0 ? g.x + g.w + PAD : g.x - PAD, hy = g.y + g.h / 2;
+  let ex = c.x, ey = c.y;
+  if (c.target) {
+    const t = c.target, tx = c.dir > 0 ? t.x - PAD : t.x + t.w + PAD, ty = t.y + t.h / 2;
+    ex += (tx - ex) * c.pull; ey += (ty - ey) * c.pull;
+    ctx.strokeStyle = col; ctx.lineWidth = 3 / s; ctx.globalAlpha = .9; ctx.beginPath(); ctx.roundRect(t.x - PAD, t.y - PAD, t.w + 2 * PAD, t.h + 2 * PAD, 40); ctx.stroke();
+    ctx.lineWidth = 2 / s; ctx.globalAlpha = .6 + .3 * Math.sin(time * 8); ctx.beginPath(); ctx.arc(tx, ty, 13 / s, 0, 6.3); ctx.stroke();
+  }
+  const lw = pipePxN(g.nodes.length) / s, lock = !!c.target; ctx.lineCap = 'round'; ctx.beginPath();
+  if (c.dir > 0) curve(hx, hy, ex, ey); else curve(ex, ey, hx, hy);
+  ctx.globalAlpha = .28; ctx.strokeStyle = lock ? col : '#fff'; ctx.lineWidth = lw * 1.9; ctx.stroke();
+  ctx.globalAlpha = .95; ctx.lineWidth = lw; ctx.setLineDash(lock ? [] : [14 / s, 10 / s]); ctx.lineDashOffset = -time * 60 / s; ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = lock ? col : '#fff'; ctx.beginPath(); ctx.arc(ex, ey, 7 / s, 0, 6.3); ctx.fill(); ctx.globalAlpha = 1;
+}
+function finishGroupConn() {
+  const c = gconn; gconn = null; cv.style.cursor = '';
+  if (!c.target) return;
+  const [src, dst] = c.dir > 0 ? [c.from, c.target] : [c.target, c.from];
+  const side = g => ({ type: g.type, layer: g.layer, count: g.nodes.length, assetIds: g.nodes.map(n => n.id) });
+  const n = src.nodes.length, m = dst.nodes.length, ge = gedges.find(x => x.a === src && x.b === dst);
+  emit('connectRequest', { source: 'group-drag', from: side(src), to: side(dst), cardinality: n === 1 && m === 1 ? 'one-to-one' : n === 1 ? 'one-to-many' : m === 1 ? 'many-to-one' : 'many-to-many', existingLinks: ge ? ge.edges.length : 0 });
+}
+function renderConnectDialog(req) { // built-in stand-in for the host's table UI; same data, same connectMany command
+  if (req.source !== 'group-drag' || !graph.defaultPanel) return;
+  const A = req.from.assetIds.map(i => nodeById.get(i)), B = req.to.assetIds.map(i => nodeById.get(i));
+  const uniq = (list, k) => [...new Set(list.flatMap(n => n[k].map(p => p.name)))].sort(natural);
+  const outs = uniq(A, 'outs'), ins = uniq(B, 'ins');
+  const mk = (tag, props = {}) => Object.assign(document.createElement(tag), props);
+  const field = (label, el) => { const r = mk('div', { className: 'r' }); r.append(mk('span', { textContent: label }), el); return r; };
+  const dropdown = (opts, empty) => { const el = mk('select'); for (const o of opts.length ? opts : [empty]) el.append(mk('option', { value: o.value ?? o, textContent: o.label ?? o })); el.style.cssText = 'background:#1a1a22;color:#e6e6ee;border:1px solid #2a2a36;border-radius:6px;padding:3px 6px;max-width:150px'; return el; };
+  const ep = dropdown(outs, 'no egress ports'), ip = dropdown(ins, 'no ingress ports');
+  const mode = dropdown([{ value: 'fan', label: 'every source → every target' }, { value: 'zip', label: 'pair one-to-one, in order' }]);
+  const info = mk('div', { className: 'r' }), b = mk('b'); info.append(mk('span', { textContent: 'Result' }), b);
+  const pairs = () => mode.value === 'zip' ? A.slice(0, Math.min(A.length, B.length)).map((a, i) => [a, B[i]]) : A.flatMap(a => B.map(t => [a, t]));
+  const outP = (n, name) => n.outs.find(p => p.name === name), inP = (n, name) => n.ins.find(p => p.name === name);
+  const valid = (a, t) => { const f = outP(a, ep.value), g = inP(t, ip.value); return a !== t && f && g && !a.out.some(e => e.b === t && e.fp === f && e.tp === g); };
+  const refresh = () => { const all = pairs(), ok = all.length > 50000 ? 0 : all.filter(([a, t]) => valid(a, t)).length; b.textContent = all.length > 50000 ? 'too many pairs (max 50,000)' : `${ok} new connections` + (all.length - ok ? ` (${all.length - ok} skipped: missing port or already linked)` : ''); go.disabled = !ok; go.style.opacity = ok ? 1 : .4; return ok; };
+  const go = mk('button', { textContent: 'Connect' }), cancel = mk('button', { textContent: 'Cancel' });
+  go.style.cssText = 'border-color:#1f5a3a;background:#12261b;color:#7de08a'; cancel.style.cssText = 'border-color:#2a2a36;background:#1a1a22;color:#c4c4d0';
+  for (const el of [ep, ip, mode]) el.addEventListener('change', refresh);
+  go.addEventListener('click', () => {
+    const specs = pairs().filter(([a, t]) => valid(a, t)).map(([a, t]) => ({ from: a.id, fromPort: outP(a, ep.value).id, to: t.id, toPort: inP(t, ip.value).id }));
+    graph.connectMany(specs);
+    const ge = gedges.find(x => x.a.nodes[0].id === req.from.assetIds[0] && x.b.nodes[0].id === req.to.assetIds[0]); select({ ge });
+  });
+  cancel.addEventListener('click', () => renderPanel(payload()));
+  panel.hidden = false; $('ep-title').textContent = 'Connect groups';
+  $('ep-rows').replaceChildren(field('From', mk('b', { textContent: `${req.from.type} ×${req.from.count}` })), field('To', mk('b', { textContent: `${req.to.type} ×${req.to.count}` })), field('Egress port', ep), field('Ingress port', ip), field('Pairing', mode), info);
+  $('ep-actions').replaceChildren(go, cancel); refresh();
+}
+// demo stand-in for a backend, so the pending (faded) state is visible; a real host answers connectRequest itself
+graph.on('connectRequest', r => {
+  if (r.source !== 'port-drag') return;
+  const mode = $('save').value;
+  if (mode === 'instant') return Promise.resolve();
+  return new Promise((ok, no) => setTimeout(() => mode === 'fail' ? no(new Error('save failed')) : ok(), 1500));
+});
+renderConnectDialog.builtin = true;
+graph.on('connectRequest', renderConnectDialog); // the host hook: { source, from: {assetIds, port?}, to: {…}, cardinality, existingLinks }; may return a Promise
+function clickAt(p) {
+  const sc = view.s, n = sc >= .1 ? pick(p.x, p.y) : null;
+  if (n) return select({ node: n });
+  const e = sc >= .45 ? pickEdge(p.x, p.y, lastVis) : null; if (e) return select({ edge: e });
+  if (sc < .6) { const ge = pickGroupEdge(p.x, p.y); if (ge) return select({ ge }); const g = pickGroup(p.x, p.y); if (g) return select({ group: g }); }
+  select(null);
+}
+const SNAP_PX = 70, ELEC_PX = 140, MAG_PX = 140, CARD_MARGIN_PX = 24, MAG_PULL = .92, RING_PX = 18; // the target ring is at least RING_PX on screen at any zoom; inside it the wire is snapped
+const ringR = () => Math.max(15, RING_PX / view.s); // release within SNAP_PX connects; the arc crackles from ELEC_PX in
+function pickPort(x, y) {
+  const r = Math.max(10, 14 / view.s);
+  for (const n of queryNodes(x - r - 1, y - r - 1, x + r + 1, y + r + 1))
+    for (const dir of [1, -1]) {
+      const arr = dir > 0 ? n.outs : n.ins, px = dir > 0 ? n.x + n.w : n.x;
+      for (let k = 0; k < arr.length; k++) if (Math.hypot(px - x, portY(n, k) - y) <= r) return { node: n, dir, idx: k };
+    }
+  return null;
+}
+function bump(n, side, push) { // side: -1 = ingress (left) edge lights up, +1 = egress (right); push = x nudge in world units
+  if (n.x0 === undefined) n.x0 = n.x;
+  n.bt = time; n.bside = side; n.bpush = push; bumping.add(n);
+}
+function finishConn() {
+  const c = conn; conn = null; cv.style.cursor = '';
+  if (c.target) {
+    const t = c.target, [a, ai, b, bi] = c.dir > 0 ? [c.from, c.idx, t.node, t.idx] : [t.node, t.idx, c.from, c.idx];
+    const e = connect(a, ai, b, bi);
+    if (e) { flash = { e, t0: time, node: t.node, dir: c.dir, idx: t.idx }; bump(b, -1, 7); undo.push({ type: 'add', edges: [e] }); afterChange('connect', [e.id], []); requestConnect(e); return; }
+  }
+  retract = { ...c, target: null, t0: time };
+}
+let down = null;
+cv.addEventListener('pointerdown', e => {
+  if (view.s >= .5) {
+    const p = toWorld(e.clientX, e.clientY), hit = pickPort(p.x, p.y);
+    if (hit) { conn = { from: hit.node, dir: hit.dir, idx: hit.idx, x: p.x, y: p.y, target: null, pull: 0, pt: null }; retract = null; cv.setPointerCapture(e.pointerId); cv.style.cursor = 'crosshair'; dirty = true; return; }
+  }
+  if (view.s < .6) { // zoomed out: grab a group's handle to drag a fat pipe to another group
+    const p = toWorld(e.clientX, e.clientY), h = pickGroupHandle(p.x, p.y);
+    if (h) { gconn = { from: h.group, dir: h.dir, x: p.x, y: p.y, target: null, pull: 0 }; cv.setPointerCapture(e.pointerId); cv.style.cursor = 'crosshair'; dirty = true; return; }
+  }
+  down = { x: e.clientX, y: e.clientY }; drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; cv.classList.add('drag'); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointerup', e => {
+  if (gconn) { finishGroupConn(); dirty = true; return; }
+  if (conn) { finishConn(); dirty = true; return; }
+  cv.classList.remove('drag'); drag = null;
+  if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 4) { const p = toWorld(e.clientX, e.clientY); clickAt(p); }
+  down = null; dirty = true;
+});
+cv.addEventListener('pointermove', e => {
+  mouse = { x: e.clientX, y: e.clientY };
+  if (gconn) { const p = toWorld(e.clientX, e.clientY), t = pickGroup(p.x, p.y); gconn.x = p.x; gconn.y = p.y; gconn.target = t && t !== gconn.from ? t : null; dirty = true; return; }
+  if (conn) { const p = toWorld(e.clientX, e.clientY); conn.x = p.x; conn.y = p.y; dirty = true; return; }
+  if (!drag) { const p = toWorld(e.clientX, e.clientY); cv.style.cursor = (view.s >= .5 && pickPort(p.x, p.y)) || (view.s < .6 && pickGroupHandle(p.x, p.y)) ? 'crosshair' : ''; }
+  if (drag) { view.x = drag.vx - (e.clientX - drag.x) / view.s; view.y = drag.vy - (e.clientY - drag.y) / view.s; syncAnchor(); }
+  dirty = true;
+});
+const fullBox = document.getElementById('full');
+fullBox.addEventListener('change', () => { fullPath = fullBox.checked; computeSel(selected); dirty = true; });
+addEventListener('keydown', e => {
+  if (e.key === 'f' || e.key === 'F') { fullBox.checked = !fullBox.checked; fullBox.dispatchEvent(new Event('change')); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selEdge) { e.preventDefault(); removeEdges([selEdge]); }
+  if ((e.key === 'z' || e.key === 'Z') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); undoLast(); }
+  if (e.key === 'Escape') { gconn = null; if (conn) { retract = { ...conn, target: null, t0: time }; conn = null; cv.style.cursor = ''; } select(null); }
+  const i = parseInt(e.key); if (i >= 1 && i <= comps.length) focus(comps[i - 1].bbox);
+});
+
+// ---------- drawing ----------
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const P = (x, y) => ({ x, y });
+function fwdSegs(x0, y0, x1, y1) { const d = Math.max(60, Math.abs(x1 - x0) * .5); return [[P(x0, y0), P(x0 + d, y0), P(x1 - d, y1), P(x1, y1)]]; }
+function loopSegs(x0, y0, x1, y1, ly, stub, R) { // right out, straight to a lane, along it, straight back to the left port; big rounded corners
+  const sx = x0 + stub, ex = x1 - stub, v = Math.sign(ly - y0) || -1, u = Math.sign(y1 - ly) || 1, w = Math.sign(ex - sx) || -1, K = .5523;
+  const r = Math.max(2, Math.min(R, stub, Math.abs(ly - y0) / 2, Math.abs(ly - y1) / 2, Math.abs(ex - sx) / 2));
+  const line = (a, b) => [a, P(a.x + (b.x - a.x) / 3, a.y + (b.y - a.y) / 3), P(a.x + 2 * (b.x - a.x) / 3, a.y + 2 * (b.y - a.y) / 3), b];
+  const corner = (a, din, b, dout) => [a, P(a.x + din[0] * K * r, a.y + din[1] * K * r), P(b.x - dout[0] * K * r, b.y - dout[1] * K * r), b];
+  const A = [P(x0, y0), P(sx - r, y0), P(sx, y0 + v * r), P(sx, ly - v * r), P(sx + w * r, ly), P(ex - w * r, ly), P(ex, ly + u * r), P(ex, y1 - u * r), P(ex + r, y1), P(x1, y1)];
+  return [line(A[0], A[1]), corner(A[1], [1, 0], A[2], [0, v]), line(A[2], A[3]), corner(A[3], [0, v], A[4], [w, 0]), line(A[4], A[5]),
+          corner(A[5], [w, 0], A[6], [0, u]), line(A[6], A[7]), corner(A[7], [0, u], A[8], [1, 0]), line(A[8], A[9])];
+}
+function strokeSegs(sg) { ctx.moveTo(sg[0][0].x, sg[0][0].y); for (const q of sg) ctx.bezierCurveTo(q[1].x, q[1].y, q[2].x, q[2].y, q[3].x, q[3].y); }
+function bz(q, t) { const m = 1 - t, a = m * m * m, b = 3 * m * m * t, c = 3 * m * t * t, d = t * t * t; return P(a * q[0].x + b * q[1].x + c * q[2].x + d * q[3].x, a * q[0].y + b * q[1].y + c * q[2].y + d * q[3].y); }
+function sampleSegs(sg, n) { const pts = []; for (let i = 0; i <= n; i++) { const u = i / n * sg.length, k = Math.min(sg.length - 1, Math.floor(u)); pts.push(bz(sg[k], u - k)); } return pts; }
+function displace(pts, off) { // push each sample sideways by off(i, n)
+  return pts.map((p, i) => { const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], tx = b.x - a.x, ty = b.y - a.y, l = Math.hypot(tx, ty) || 1, o = off(i, pts.length - 1); return P(p.x - ty / l * o, p.y + tx / l * o); });
+}
+function strokePts(pts) { ctx.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y); }
+function curve(ax_, ay_, bx, by) { strokeSegs(fwdSegs(ax_, ay_, bx, by)); }
+function orth(x0, y0, x1, y1, ly, stub, R) { strokeSegs(loopSegs(x0, y0, x1, y1, ly, stub, R)); }
+function edgeSegs(e) {
+  const A = e.a, B = e.b, ly = e.ge.laneY, ay = portY(A, e.ai), by = portY(B, e.bi);
+  return ly === undefined ? fwdSegs(A.x + A.w, ay, B.x, by) : loopSegs(A.x + A.w, ay, B.x, by, ly, 60, 50);
+}
+function edgePath(e) { strokeSegs(edgeSegs(e)); }
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+
+function drawGroups(frameA, pipeA) {
+  const s = view.s, a = toWorld(0, 0), b = toWorld(W, H), dim = selNodes.size > 0;
+  ctx.lineCap = 'round';
+  for (const ge of gedges) {
+    const A = ge.a, B = ge.b;
+    if (Math.max(A.x, B.x) + 9999 < a.x && false) continue;
+    const on = !dim || (selGroups.has(A) && selGroups.has(B));
+    ctx.globalAlpha = pipeA * (on ? 1 : .12);
+    const wpx = Math.min(16, 1.5 + Math.log2(ge.count + 1) * 1.3);
+    ctx.lineWidth = Math.min(wpx / s, .9 * Math.min(A.h, B.h) + 2 * PAD);
+    ctx.strokeStyle = COLOR[A.type] + 'aa';
+    ctx.beginPath(); strokeSegs(geSegs(ge));
+    ctx.stroke(); ctx.setLineDash([]);
+    if (ge === selGE || ge === hoverGE) { // hovered / selected pipe: glow + bright core
+      const sel = ge === selGE, pw = ctx.lineWidth; ctx.globalAlpha = pipeA * (sel ? .4 : .25); ctx.lineWidth = pw * 1.8 + 5 / s; ctx.stroke();
+      ctx.globalAlpha = pipeA; ctx.strokeStyle = sel ? '#fff' : COLOR[A.type]; ctx.lineWidth = Math.max(2 / s, pw * .35); ctx.stroke();
+    }
+    if (ge.count > 1 && wpx > 3.5 && ge.laneY === undefined) {
+      ctx.fillStyle = '#e6e6ee'; ctx.font = `600 ${13 / s}px -apple-system,system-ui`; ctx.textAlign = 'center';
+      ctx.fillText(`×${ge.count}`, (A.x + A.w + PAD + B.x - PAD) / 2, (A.y + A.h / 2 + B.y + B.h / 2) / 2 - wpx / s);
+    }
+  }
+  ctx.textAlign = 'left';
+  for (const g of groups) {
+    let x = g.x - PAD, y = g.y - PAD, w = g.w + 2 * PAD, h = g.h + 2 * PAD;
+    if (x > b.x || y > b.y || x + w < a.x || y + h < a.y) continue;
+    const mn = 10 / s; if (w < mn) { x -= (mn - w) / 2; w = mn; } if (h < mn) { y -= (mn - h) / 2; h = mn; }
+    const on = !dim || selGroups.has(g);
+    ctx.globalAlpha = frameA * (on ? 1 : .25);
+    ctx.fillStyle = COLOR[g.type] + '1f'; rr(x, y, w, h, 40); ctx.fill();
+    ctx.strokeStyle = COLOR[g.type] + (on && dim ? 'ff' : '88'); ctx.lineWidth = 2 / s; ctx.stroke();
+    if (g === selGroup || (selGE && (g === selGE.a || g === selGE.b))) { ctx.strokeStyle = COLOR[g.type]; ctx.lineWidth = 4 / s; ctx.stroke(); ctx.globalAlpha = frameA * .3; ctx.lineWidth = 12 / s; ctx.stroke(); }
+    const fs = Math.max(18, 13 / s); ctx.fillStyle = '#e6e6ee'; ctx.font = `600 ${fs}px -apple-system,system-ui`;
+    ctx.fillText(`${g.type} ×${g.nodes.length}`, x + 10, y - fs * .35);
+  }
+  const ha = frameA * (1 - smooth(.45, .6, s)); // drag handles: egress on the right edge, ingress on the left
+  if (ha > .02) for (const g of groups) {
+    if (g.x - PAD > b.x || g.y - PAD > b.y || g.x + g.w + PAD < a.x || g.y + g.h + PAD < a.y) continue;
+    const r = Math.max(4, 7 / s), hy = g.y + g.h / 2, hot = gconn && gconn.from === g, tgt = gconn && gconn.target === g;
+    for (const [hx, dir] of [[g.x + g.w + PAD, 1], [g.x - PAD, -1]]) {
+      ctx.globalAlpha = ha * (hot && gconn.dir === dir || tgt ? 1 : .75); ctx.fillStyle = COLOR[g.type];
+      ctx.beginPath(); ctx.arc(hx, hy, r, 0, 6.3); ctx.fill();
+      ctx.globalAlpha = ha * .5; ctx.strokeStyle = '#0b0b0e'; ctx.lineWidth = 1.5 / s; ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawMembers(vis, alpha) {
+  if (vis.size > 6000) return;
+  const dim = selNodes.size > 0, buckets = new Map();
+  for (const n of vis) {
+    const on = !dim || selNodes.has(n), k = (n.status === 'degraded' ? '#ff5a5a' : COLOR[n.type]) + (on ? '' : '|d');
+    let arr = buckets.get(k); if (!arr) buckets.set(k, arr = []); arr.push(n);
+  }
+  for (const [k, arr] of buckets) {
+    const [c, d] = k.split('|'); ctx.globalAlpha = alpha * (d ? .2 : 1); ctx.fillStyle = c; ctx.beginPath();
+    for (const n of arr) ctx.rect(n.x, n.y, n.w, n.h);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+let frameNo = 0, drawnEdges = 0;
+function drawNear(vis, alpha) {
+  const s = view.s, dim = selNodes.size > 0, lw = 2.4 / Math.min(1, s);
+  frameNo++; drawnEdges = 0; ctx.lineCap = 'round';
+  for (const n of vis) { n.hiC = []; n.hiP = new Array(n.ins.length).fill(0); n.hoP = new Array(n.outs.length).fill(0); }
+  const glowEdges = [];
+  for (const n of vis) for (const e of [...n.out, ...n.in]) {
+    if (e.stamp === frameNo) continue; e.stamp = frameNo;
+    const A = e.a, B = e.b, va = vis.has(A), vb = vis.has(B);
+    const picked = selEdges.has(e);
+    if (!(va && vb) && !picked) { if (va) A.hoP[e.ai]++; else { B.hiP[e.bi]++; B.hiC[e.bi] = COLOR[A.type]; } continue; }
+    if (!picked && drawnEdges++ > 1500) continue;
+    const on = !dim || selEdges.has(e);
+    ctx.globalAlpha = alpha * (on ? 1 : .08) * (e.pending ? .6 + .22 * Math.sin(time * 5) : 1);
+    ctx.strokeStyle = COLOR[A.type]; ctx.lineWidth = lw; ctx.setLineDash(e.enabled === false ? [14, 10] : []);
+    ctx.beginPath(); edgePath(e); ctx.stroke();
+    if (e.ct !== undefined) { const k = (time - e.ct) / .5; if (k >= 1) e.ct = undefined; else { ctx.globalAlpha = alpha * .4 * (1 - k); ctx.lineWidth = lw * 5; ctx.stroke(); ctx.lineWidth = lw; } }
+    if (dim && on && glowEdges.length < 500) glowEdges.push(e);
+  }
+  ctx.setLineDash([]);
+  // selected path: wide glow + flowing dashes
+  for (const e of glowEdges) {
+    const A = e.a; ctx.beginPath(); edgePath(e);
+    ctx.globalAlpha = alpha * .18; ctx.strokeStyle = COLOR[A.type]; ctx.lineWidth = lw * 4; ctx.stroke();
+    ctx.globalAlpha = alpha * .9; ctx.strokeStyle = '#fff'; ctx.lineWidth = lw * .5; ctx.setLineDash([10, 26]); ctx.lineDashOffset = -time * 90; ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  for (const e of [hoverEdge, selEdge]) { // hovered / selected wire sits above the rest
+    if (!e) continue; const sel = e === selEdge;
+    ctx.beginPath(); edgePath(e); ctx.lineCap = 'round';
+    ctx.globalAlpha = alpha * (sel ? .4 : .22); ctx.strokeStyle = COLOR[e.a.type]; ctx.lineWidth = lw * (sel ? 7 : 5); ctx.stroke();
+    ctx.globalAlpha = alpha; ctx.strokeStyle = sel ? '#fff' : COLOR[e.a.type]; ctx.lineWidth = lw * (sel ? 1.8 : 1.5); ctx.stroke();
+  }
+  // cards
+  for (const n of vis) {
+    const col = COLOR[n.type], inSel = !dim || selNodes.has(n);
+    ctx.globalAlpha = alpha * (inSel ? 1 : .3);
+    const ca = ctx.globalAlpha, pg = n.bt != null ? Math.max(0, 1 - (time - n.bt) / 1.3) : 0, gg = Math.max(n.gl, pg);
+    if (gg > .02) { ctx.shadowColor = col; ctx.shadowBlur = 50 * gg * Math.min(1, s * 2); }
+    ctx.fillStyle = '#17171d'; rr(n.x, n.y, n.w, n.h, 14); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.strokeStyle = gg > .02 ? col : '#262630'; ctx.lineWidth = 1.5 + 1.5 * gg; ctx.stroke();
+    if (pg > .02) { // light washes in from the connected side, with a bright bar along that edge
+      const sx = n.bside < 0 ? n.x : n.x + n.w, gr = ctx.createLinearGradient(sx, 0, sx - n.bside * 100, 0);
+      gr.addColorStop(0, col); gr.addColorStop(1, col + '00');
+      ctx.save(); rr(n.x, n.y, n.w, n.h, 14); ctx.clip();
+      ctx.globalAlpha = ca * pg * .55; ctx.fillStyle = gr; ctx.fillRect(n.x, n.y, n.w, n.h);
+      ctx.globalAlpha = ca * Math.min(1, pg * 1.5); ctx.strokeStyle = col; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+      const run = Math.min(1, (time - n.bt) / .55), cy = n.y + 14 + (n.h - 28) * run * (2 - run), half = Math.min(34, n.h * .3);
+      ctx.beginPath(); ctx.moveTo(sx - n.bside * 2, Math.max(n.y + 8, cy - half)); ctx.lineTo(sx - n.bside * 2, Math.min(n.y + n.h - 8, cy + half)); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(n.x + 20, n.y + 26, 5, 0, 6.3); ctx.fill();
+    ctx.fillStyle = '#f1f1f6'; ctx.font = '600 15px -apple-system,system-ui'; ctx.fillText(n.name, n.x + 34, n.y + 31);
+    ctx.fillStyle = '#6d6d7a'; ctx.font = '12px -apple-system,system-ui'; ctx.fillText(`${n.type} · in ${n.in.length} out ${n.out.length}`, n.x + 18, n.y + 52);
+    const ok = n.status === 'ready';
+    ctx.fillStyle = ok ? '#7de08a' : '#ff6b6b'; ctx.beginPath(); ctx.arc(n.x + 22, n.y + n.h - 14, 3.5, 0, 6.3); ctx.fill();
+    ctx.fillStyle = '#8f8f9c'; ctx.fillText(ok ? 'All inputs ready' : 'Degraded', n.x + 34, n.y + n.h - 10);
+    n.ins.forEach((p, k) => port(n.x, portY(n, k), col, n.gl, -1, n.hiP[k], p.name, n.hiC[k]));
+    n.outs.forEach((p, k) => port(n.x + n.w, portY(n, k), col, n.gl, 1, n.hoP[k], p.name));
+  }
+  if (selEdge) { // ring both ends of the selected wire
+    const e = selEdge; ctx.strokeStyle = COLOR[e.a.type]; ctx.lineWidth = 2.5 / Math.min(1, s); ctx.globalAlpha = alpha;
+    for (const [x, y] of [[e.a.x + e.a.w, portY(e.a, e.ai)], [e.b.x, portY(e.b, e.bi)]]) { ctx.beginPath(); ctx.arc(x, y, 12 / Math.min(1, s), 0, 6.3); ctx.stroke(); }
+  }
+  ctx.globalAlpha = 1;
+}
+function port(x, y, color, gl, dir, hidden, label, stubColor = color) {
+  if (gl > .02) { ctx.globalAlpha *= 1; ctx.strokeStyle = color + '88'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 10 + 4 * Math.sin(time * 5) * gl, 0, 6.3); ctx.stroke(); }
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.3); ctx.fill();
+  ctx.fillStyle = '#b4b4c2'; ctx.font = '600 12px -apple-system,system-ui'; ctx.textAlign = dir > 0 ? 'right' : 'left'; ctx.fillText(label, x - dir * 14, y + 4); ctx.textAlign = 'left';
+  if (hidden) { // off-screen connections: one fat stub + count instead of N overlapping wires
+    ctx.strokeStyle = stubColor + '99'; ctx.lineWidth = Math.min(14, 2 + Math.log2(hidden + 1) * 1.2); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dir * 90, y); ctx.stroke();
+    if (hidden > 1) { ctx.fillStyle = '#e6e6ee'; ctx.font = '600 12px -apple-system,system-ui'; ctx.textAlign = dir > 0 ? 'left' : 'right'; ctx.fillText(`+${hidden}`, x + dir * 98, y + 4); ctx.textAlign = 'left'; }
+  }
+}
+
+
+// selected path at mid/far zoom: individual wires batched into one path, culled to the viewport
+function drawSelPath(alpha) {
+  const s = view.s, a = toWorld(0, 0), b = toWorld(W, H); let n = 0;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const pass of [0, 1]) {
+    ctx.beginPath();
+    for (const e of selEdges) {
+      const A = e.a, B = e.b;
+      if (Math.max(A.x + A.w, B.x + B.w) < a.x || Math.min(A.x, B.x) > b.x) continue;
+      if (e.ge.laneY === undefined && (Math.max(A.y, B.y) < a.y || Math.min(A.y, B.y) > b.y)) continue;
+      if (pass === 0 && ++n > 4000) break;
+      edgePath(e);
+    }
+    ctx.globalAlpha = alpha * (pass ? .95 : .25); ctx.strokeStyle = '#fff'; ctx.lineWidth = (pass ? 1.6 : 6) / s; ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawConn() {
+  const s = view.s, lw = 2.4 / Math.min(1, s);
+  if (flash) { // new wire: a bump travels source -> target, ports spring
+    const age = time - flash.t0, k = 1 - age / .9;
+    if (k <= 0) flash = null;
+    else {
+      const e = flash.e;
+      ctx.lineCap = 'round'; ctx.beginPath(); edgePath(e);
+      ctx.globalAlpha = k * .35; ctx.strokeStyle = COLOR[e.a.type]; ctx.lineWidth = lw * 6; ctx.stroke();
+      ctx.globalAlpha = k; ctx.strokeStyle = '#fff'; ctx.lineWidth = lw * 1.4; ctx.stroke();
+      const spring = 1 + .9 * Math.exp(-age * 5) * Math.cos(age * 20);
+      for (const [n, x, y] of [[e.a, e.a.x + e.a.w, portY(e.a, e.ai)], [e.b, e.b.x, portY(e.b, e.bi)]]) {
+        ctx.globalAlpha = Math.min(1, k * 2); ctx.fillStyle = COLOR[n.type]; ctx.beginPath(); ctx.arc(x, y, 6 * spring, 0, 6.3); ctx.fill();
+      }
+      const t = flash.node, tx = t.x + (flash.dir > 0 ? 0 : t.w), ty = portY(t, flash.idx);
+      ctx.globalAlpha = k; ctx.strokeStyle = COLOR[t.type]; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(tx, ty, 10 + age * 70, 0, 6.3); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+  if (ghost) { // deleted wire fades and thins out
+    const k = (time - ghost.t0) / .35;
+    if (k >= 1) ghost = null;
+    else { ctx.lineCap = 'round'; ctx.beginPath(); strokeSegs(ghost.segs); ctx.globalAlpha = 1 - k; ctx.strokeStyle = ghost.color; ctx.lineWidth = lw * (1 - .8 * k); ctx.stroke(); ctx.globalAlpha = 1; }
+  }
+  const c = conn || retract; if (!c) return;
+  const n = c.from, col = COLOR[n.type], px = n.x + (c.dir > 0 ? n.w : 0), py = portY(n, c.idx);
+  let ex = c.x, ey = c.y, fade = 1;
+  if (conn) {
+    // valid ports pulse; the snapped one gets a bigger ring
+    ctx.lineWidth = 2 / Math.min(1, s); ctx.strokeStyle = col;
+    for (const o of lastVis) {
+      if (o === n) continue;
+      const arr = c.dir > 0 ? o.ins : o.outs, ox = c.dir > 0 ? o.x : o.x + o.w;
+      for (let k = 0; k < arr.length; k++) {
+        const hot = c.near && c.near.node === o && c.near.idx === k;
+        ctx.globalAlpha = hot ? 1 : .3 + .25 * Math.sin(time * 6); ctx.beginPath(); ctx.arc(ox, portY(o, k), hot ? ringR() + 2 / s * Math.sin(time * 10) : Math.max(11, 13 / s), 0, 6.3); ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+    if (conn.pull > .003 && conn.pt) { ex += (conn.pt.x - ex) * conn.pull; ey += (conn.pt.y - ey) * conn.pull; }
+  } else { const k = Math.min(1, (time - c.t0) / .22); if (k >= 1) { retract = null; return; } ex = c.x + (px - c.x) * k * k; ey = c.y + (py - c.y) * k * k; fade = 1 - k; }
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.beginPath();
+  if (c.dir > 0) curve(px, py, ex, ey); else curve(ex, ey, px, py);
+  const wc = conn && conn.snap ? col : '#fff';
+  ctx.globalAlpha = .22 * fade; ctx.strokeStyle = wc; ctx.lineWidth = lw * 5; ctx.stroke();
+  ctx.globalAlpha = fade; ctx.lineWidth = lw * 1.2; ctx.stroke();
+  ctx.fillStyle = wc; ctx.beginPath(); ctx.arc(ex, ey, 5, 0, 6.3); ctx.fill();
+  if (conn && conn.near && !conn.snap) { // electricity: a jagged arc bridges the gap from the tip of the wire to the port
+    const t = conn.near, tx = t.node.x + (c.dir > 0 ? 0 : t.node.w), ty = portY(t.node, t.idx);
+    const dx = tx - ex, dy = ty - ey, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+    const segs = Math.max(6, Math.min(40, Math.round(len * s / 5))), amp = (3 + 6 * conn.elec) / s;
+    ctx.beginPath(); ctx.moveTo(ex, ey);
+    for (let i = 1; i < segs; i++) { const u = i / segs, o = (Math.random() * 2 - 1) * amp * Math.sin(Math.PI * u) * 1.4; ctx.lineTo(ex + dx * u + nx * o, ey + dy * u + ny * o); }
+    ctx.lineTo(tx, ty);
+    ctx.globalAlpha = .45; ctx.strokeStyle = col; ctx.lineWidth = lw * 4; ctx.stroke();
+    ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = lw * 1.1; ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+let lastVis = new Set();
+const glowing = new Set(), bumping = new Set();
+function frame(t) {
+  requestAnimationFrame(frame); time = t / 1000;
+  let anim = false;
+  if (Math.abs(ts - view.s) > ts * .002) { view.s += (ts - view.s) * .22; anim = true; } else view.s = ts;
+  if (!drag) { view.x = wx - ax / view.s; view.y = wy - ay / view.s; }
+  const s = view.s, a = toWorld(0, 0), b = toWorld(W, H);
+  // hover + glow easing
+  const p = toWorld(mouse.x, mouse.y), h = s >= .1 && !drag ? pick(p.x, p.y) : null;
+  if (h !== hover) { hover = h; dirty = true; }
+  if (hover) glowing.add(hover); if (selected) glowing.add(selected);
+  for (const n of glowing) { const tgt = (n === hover || n === selected) ? 1 : 0; n.gl += (tgt - n.gl) * .25; if (Math.abs(tgt - n.gl) > .01) anim = true; else { n.gl = tgt; if (!tgt) glowing.delete(n); } }
+  for (const n of bumping) { // shove then settle: damped sine, so the card overshoots slightly and returns
+    const age = time - n.bt;
+    if (age > 1.3) { n.x = n.x0; n.bt = null; bumping.delete(n); } else n.x = n.x0 + n.bpush * (age / .13) * Math.exp(1 - age / .13);
+  }
+  if (gconn) gconn.pull += ((gconn.target ? 1 : 0) - gconn.pull) * .3;
+  if (selNodes.size || conn || gconn || retract || flash || ghost || bumping.size || pendingEdges.size || pulseUntil > time) anim = true;
+  if (!dirty && !anim) return; dirty = false;
+  const t0 = performance.now();
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.fillStyle = '#0b0b0e'; ctx.fillRect(0, 0, W, H);
+  ctx.setTransform(DPR * s, 0, 0, DPR * s, -view.x * s * DPR, -view.y * s * DPR);
+  const nearA = smooth(.4, .6, s), midA = smooth(.07, .12, s) * (1 - nearA);
+  const hp = toWorld(mouse.x, mouse.y);
+  hoverGE = (!conn && !drag && s < .6 && !hoverEdge) ? pickGroupEdge(hp.x, hp.y) : null;
+  drawGroups(1 - .75 * smooth(.4, .8, s), 1 - smooth(.35, .6, s));
+  if (gconn) drawGroupConn();
+  let vis = new Set();
+  if (s >= .07) vis = queryNodes(a.x, a.y, b.x, b.y);
+  if (midA > .01) drawMembers(vis, midA);
+  if (selNodes.size && nearA < .99) drawSelPath(1 - nearA);
+  lastVis = vis;
+  hoverEdge = (!conn && !drag && !hover && s >= .45) ? pickEdge(toWorld(mouse.x, mouse.y).x, toWorld(mouse.x, mouse.y).y, vis) : null;
+  if (!conn && !drag && cv.style.cursor !== 'crosshair') cv.style.cursor = hoverEdge || hoverGE ? 'pointer' : '';
+  if (conn) { // nearest opposite-side port within the snap radius
+    const r = ELEC_PX / s; let best = null, bd = r;
+    for (const o of vis) {
+      if (o === conn.from) continue;
+      const arr = conn.dir > 0 ? o.ins : o.outs, ox = conn.dir > 0 ? o.x : o.x + o.w;
+      const m = CARD_MARGIN_PX / s, inCard = conn.x >= o.x - m && conn.x <= o.x + o.w + m && conn.y >= o.y - m && conn.y <= o.y + o.h + m;
+      let nk = -1, nd = Infinity;
+      for (let k = 0; k < arr.length; k++) { const d = Math.hypot(ox - conn.x, portY(o, k) - conn.y); if (d < nd) { nd = d; nk = k; } }
+      if (nk < 0) continue;
+      if (inCard) { best = { node: o, idx: nk }; bd = 0; break; } // dropped on a card: it takes the nearest compatible port
+      if (nd < bd) { bd = nd; best = { node: o, idx: nk }; }
+    }
+    conn.near = best; conn.elec = best ? 1 - bd * s / ELEC_PX : 0;
+    conn.target = best && bd * s <= SNAP_PX ? best : null;
+    // magnet: the wire's tip is drawn toward the nearest port, easing in as you approach (stops short so the arc still shows)
+    const m = best ? Math.max(0, 1 - bd * s / MAG_PX) : 0;
+    if (best) conn.pt = { x: best.node.x + (conn.dir > 0 ? 0 : best.node.w), y: portY(best.node, best.idx) };
+    conn.snap = !!best && bd <= ringR();
+    conn.pull += ((conn.snap ? 1 : MAG_PULL * m * m * (3 - 2 * m)) - conn.pull) * .3;
+  }
+  if (nearA > .01) { drawNear(vis, nearA); drawConn(); }
+  const mode = nearA > .5 ? 'NEAR' : s >= .07 ? 'MID' : 'FAR';
+  hud.textContent = `${mode}  zoom ${s.toFixed(3)}  |  ${nodes.length} nodes ${edges.length} edges ${groups.length} groups  |  drawn ${vis.size} nodes ${nearA > .01 ? drawnEdges : 0} edges  |  ${(performance.now() - t0).toFixed(1)} ms\n` +
+    `scroll=zoom drag=pan click=select path (esc clears)  drag from a port to connect  keys 1-${comps.length}: jump to pipeline` + (selected ? `\nselected ${selected.name}: ${selNodes.size} nodes on path` : '');
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
