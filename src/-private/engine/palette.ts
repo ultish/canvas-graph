@@ -1,5 +1,5 @@
 // Asset type -> colour. Stable (a hash of the type name), so a type keeps its colour across sessions, with
-// overrides for the types you want to pin. Always '#rrggbb': the renderer appends alpha as two hex digits.
+// overrides for the types you want to pin. No reds: red means degraded. Always '#rrggbb': the renderer appends alpha as two hex digits.
 const PALETTE = [
   '#ffd24a',
   '#ff7a59',
@@ -11,7 +11,7 @@ const PALETTE = [
   '#f2a65a',
   '#c3e86d',
   '#7c8cff',
-  '#ff6b6b',
+  '#d4a5ff',
   '#4dd0b8',
 ] as const;
 

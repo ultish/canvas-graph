@@ -108,7 +108,10 @@ export interface GroupEdge {
 }
 
 export interface Comp {
+  /** 'pipeline': assets connected to each other. 'unconnected': every asset with no connections, gathered into one block. */
+  kind: 'pipeline' | 'unconnected';
   nodes: AssetNode[];
+  groups: Group[];
   bbox: { x: number; y: number; w: number; h: number };
   bbox0: { y: number; h: number };
 }

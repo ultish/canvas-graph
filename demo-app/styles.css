@@ -58,3 +58,247 @@ body {
   flex-direction: column;
   gap: 10px;
 }
+
+/* landing page: the link to the cookbook */
+.demo__link {
+  color: #8ab4ff;
+  text-decoration: none;
+}
+
+/* ---- cookbook ---------------------------------------------------------------------------------------------- */
+.cb {
+  --cb-sticky: 4.5rem;
+  min-height: 100vh;
+  background: #0b0b0e;
+  color: #c4c4d0;
+  scroll-padding-top: var(--cb-sticky);
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 4.5rem;
+}
+
+.cb__header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  border-bottom: 1px solid #1c1c24;
+  background: #101015f2;
+  backdrop-filter: blur(6px);
+}
+
+.cb__eyebrow {
+  margin: 0;
+  color: #6d6d7a;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cb__home,
+.cb__back {
+  color: #f1f1f6;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.cb__back {
+  color: #8ab4ff;
+  font-weight: 400;
+}
+
+.cb__main {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+
+.cb-intro h1 {
+  margin: 0 0 12px;
+  color: #f1f1f6;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+}
+
+.cb-intro p {
+  line-height: 1.6;
+  color: #a8a8b6;
+}
+
+.cb__toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.cb__toc a {
+  padding: 3px 10px;
+  border: 1px solid #2a2a36;
+  border-radius: 999px;
+  color: #c4c4d0;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.cb-section {
+  margin-top: 48px;
+  padding-top: 32px;
+  border-top: 1px solid #1c1c24;
+}
+
+.cb-section h2 {
+  margin: 0 0 6px;
+  color: #f1f1f6;
+  font-size: 20px;
+}
+
+.cb-blurb {
+  margin: 0 0 14px;
+  color: #8a8a96;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.cb-live {
+  padding: 14px;
+  border: 1px solid #1f1f28;
+  border-radius: 10px;
+  background: #0f0f14;
+}
+
+.cb-label {
+  margin: 0 0 10px;
+  color: #6d6d7a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cb-stage {
+  position: relative;
+  height: 340px;
+  border: 1px solid #1f1f28;
+  border-radius: 8px;
+  background: #0b0b0e;
+  overflow: hidden;
+}
+
+.cb-overlay {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: calc(100% - 20px);
+  overflow: auto;
+}
+
+.cb-row,
+.cb-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.cb-live button,
+.cb-live select {
+  padding: 4px 10px;
+  border: 1px solid #2a2a36;
+  border-radius: 6px;
+  background: #1a1a22;
+  color: #e6e6ee;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cb-hint {
+  margin: 10px 0 0;
+  color: #8a8a96;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cb-stat {
+  margin: 0 0 6px;
+  color: #e6e6ee;
+  font:
+    12px ui-monospace,
+    monospace;
+}
+
+.cb-json {
+  max-height: 220px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #14141a;
+  color: #a8e0b4;
+  font:
+    12px/1.45 ui-monospace,
+    monospace;
+}
+
+.cb-log {
+  min-height: 1.4em;
+  margin: 10px 0 0;
+  padding: 8px 12px 8px 28px;
+  border-radius: 8px;
+  background: #14141a;
+  color: #a8a8b6;
+  font:
+    12px/1.5 ui-monospace,
+    monospace;
+}
+
+.cb-log__empty {
+  color: #6d6d7a;
+  list-style: none;
+  margin-left: -14px;
+}
+
+.cb-code {
+  margin-top: 12px;
+  border: 1px solid #1f1f28;
+  border-radius: 10px;
+  background: #101015;
+}
+
+.cb-code summary {
+  padding: 10px 14px;
+  color: #c4c4d0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cb-code pre {
+  max-height: 460px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border-top: 1px solid #1f1f28;
+  color: #d4d4e0;
+  font:
+    12px/1.55 ui-monospace,
+    monospace;
+}
+
+.cb code {
+  color: #c9c9ee;
+  font:
+    12px ui-monospace,
+    monospace;
+}

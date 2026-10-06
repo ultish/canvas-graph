@@ -1,7 +1,7 @@
 // Interaction distances are in screen pixels, so they feel the same at every zoom.
-export const SNAP_PX = 70; // letting go this close to a port connects
-export const ELEC_PX = 140; // the arc crackles and the port ring shows from here
-export const MAG_PX = 140; // the wire's tip starts being pulled toward the port
+export const ELEC_PX = 160; // the arc crackles and the port ring shows from here...
+export const SNAP_PX = ELEC_PX; // ...and wherever the arc is showing, letting go connects to that port
+export const MAG_PX = 260; // the wire's tip starts being pulled toward the port, from further out than the arc
 export const MAG_PULL = 0.92; // the most of the gap the magnet closes
 export const RING_PX = 18; // inside the port ring the wire is snapped
 export const CARD_MARGIN_PX = 24; // dropping on a card (plus this margin) takes its nearest port

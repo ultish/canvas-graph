@@ -178,6 +178,10 @@ export class Interaction {
     const A = eng.anim;
     if (A.gconn) {
       const c = A.gconn;
+      const rp = this.local(e);
+      const rw = vp.toWorld(rp.x, rp.y);
+      const t = pickGroup(rw.x, rw.y, vp.s, eng.groups);
+      c.target = t && t !== c.from ? t : null;
       A.gconn = null;
       this.setCursor('');
       if (c.target) {
@@ -189,6 +193,12 @@ export class Interaction {
     }
     if (A.conn) {
       const c = A.conn;
+      const rp = this.local(e);
+      const rw = vp.toWorld(rp.x, rp.y);
+      c.x = rw.x; // a quick flick can release before the next frame: resolve the target at the release point
+      c.y = rw.y;
+      this.mouse = { x: rp.x, y: rp.y, inside: true };
+      this.update(this.renderer.lastVisible);
       A.conn = null;
       this.setCursor('');
       const t = c.target;

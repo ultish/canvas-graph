@@ -2,6 +2,7 @@ import type { TOC } from '@ember/component/template-only';
 import graphCanvas, {
   type GraphCanvasNamed,
 } from '../modifiers/graph-canvas.ts';
+import '../styles/canvas-graph.css';
 
 export interface GraphCanvasSignature {
   Element: HTMLDivElement;

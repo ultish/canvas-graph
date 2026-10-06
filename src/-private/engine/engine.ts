@@ -216,6 +216,12 @@ export class GraphEngine {
         this.anim.pulseUntil = Math.max(this.anim.pulseUntil, this.time + 0.5);
       }
     }
+    for (const id of res.settled) {
+      const e = this.store.edgesById.get(id);
+      if (e) e.ct = this.time; // the host's data says it is saved: settle pulse
+    }
+    if (res.settled.length)
+      this.anim.pulseUntil = Math.max(this.anim.pulseUntil, this.time + 0.5);
     for (const set of [this.pending, this.deleting])
       for (const e of set)
         if (this.store.edgesById.get(e.id) !== e) set.delete(e);
@@ -605,9 +611,26 @@ export class GraphEngine {
 
   // ---------------------------------------------------------------- undo
 
+  /** Does this undo entry still mean something? (Its wires may have been rolled back or removed by the host since.) */
+  private actionable(u: UndoEntry): boolean {
+    if (u.kind === 'connected') return u.ends.some((en) => !!this.findEdge(en));
+    return u.ends.some((en) => {
+      const a = this.store.assets.get(en.a);
+      const b = this.store.assets.get(en.b);
+      return (
+        !!a &&
+        !!b &&
+        !this.findEdge(en) &&
+        !!this.store.findPort(a, 'out', en.fp) &&
+        !!this.store.findPort(b, 'in', en.tp)
+      );
+    });
+  }
+
   /** Undo the last gesture by asking the host for the inverse (a delete is undone by a connect request and vice versa). */
   undo(): boolean {
-    const u = this.undoStack.pop();
+    let u = this.undoStack.pop();
+    while (u && !this.actionable(u)) u = this.undoStack.pop(); // skip entries the host's data has already made moot
     if (!u) return false;
     if (u.kind === 'connected') {
       const edges = u.ends
@@ -667,7 +690,7 @@ export class GraphEngine {
   }
 
   get canUndo(): boolean {
-    return this.undoStack.length > 0;
+    return this.undoStack.some((u) => this.actionable(u));
   }
 
   // ---------------------------------------------------------------- animation clock

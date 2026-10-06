@@ -1,0 +1,6 @@
+- [x] hows it handle stragling assets
+  - every asset with no connections is gathered into one "unconnected assets" block: a grid per type, side by side, packed beside the pipelines (not one row each). An asset that gets its first connection triggers a relayout and leaves the block.
+- [x] hows it handle a group of assets that sit to the side, connected to each other but not the rest?
+  - each is its own pipeline; small ones are shelf-packed next to each other and beside big pipelines instead of stacking in one tall column.
+- [x] like the plumbing.gif, magnet effect needs to be from further away, once there's electricity, should snap to it on release
+  - magnet pulls from 260px, the electric arc shows from 160px, and letting go anywhere the arc is showing connects (constants.ts, tests/engine/constants.test.ts).

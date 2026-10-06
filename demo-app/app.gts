@@ -4,7 +4,7 @@ import PageTitleService from 'ember-page-title/services/page-title';
 
 class Router extends EmberRouter {
   location = 'history';
-  rootURL = '/';
+  rootURL = import.meta.env.BASE_URL ?? '/';
 }
 
 export class App extends EmberApp {
@@ -35,4 +35,6 @@ export class App extends EmberApp {
   };
 }
 
-Router.map(function () {});
+Router.map(function () {
+  this.route('cookbook');
+});

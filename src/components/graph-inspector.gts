@@ -3,6 +3,7 @@ import Component from '@glimmer/component';
 import { tracked } from '@glimmer/tracking';
 import type { SelectionPayload } from '../-private/engine/payloads.ts';
 import type { GraphHandle } from '../graph-handle.ts';
+import '../styles/canvas-graph.css';
 
 export interface GraphInspectorSignature {
   Element: HTMLElement;

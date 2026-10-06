@@ -2,12 +2,20 @@ import { on } from '@ember/modifier';
 import Component from '@glimmer/component';
 import { tracked } from '@glimmer/tracking';
 import { modifier } from 'ember-modifier';
-import type { ConnectRequest } from '../-private/engine/engine.ts';
+import type { ConnectRequest, ConnectSpec } from '../-private/engine/engine.ts';
 import type { GraphHandle } from '../graph-handle.ts';
+import '../styles/canvas-graph.css';
 
 export interface GraphConnectDialogSignature {
   Element: HTMLElement;
-  Args: { handle: GraphHandle | undefined };
+  Args: {
+    handle: GraphHandle | undefined;
+    /**
+     * Called with the pairings the user chose. Give it to persist them yourself (a GraphQL mutation); without it the
+     * dialog draws them locally through `handle.connectMany`.
+     */
+    onConnect?: (specs: ConnectSpec[]) => void;
+  };
 }
 
 type Mode = 'fan' | 'zip';
@@ -108,7 +116,9 @@ export default class GraphConnectDialog extends Component<GraphConnectDialogSign
     void (this.mode = (e.target as HTMLSelectElement).value as Mode);
   close = (): void => void (this.request = null);
   connect = (): void => {
-    this.args.handle?.connectMany(this.plan.specs);
+    const specs = this.plan.specs;
+    if (this.args.onConnect) this.args.onConnect(specs);
+    else this.args.handle?.connectMany(specs);
     this.request = null;
   };
 
@@ -122,21 +132,21 @@ export default class GraphConnectDialog extends Component<GraphConnectDialogSign
         <div class="cg-panel__row"><span>To</span><b>{{this.request.to.type}}
             ×{{this.request.to.count}}</b></div>
         <div class="cg-panel__row"><span>Egress port</span>
-          <select {{on "change" this.setEgress}}>
+          <select aria-label="Egress port" {{on "change" this.setEgress}}>
             {{#each this.egressNames as |n|}}<option
                 value={{n}}
               >{{n}}</option>{{/each}}
           </select>
         </div>
         <div class="cg-panel__row"><span>Ingress port</span>
-          <select {{on "change" this.setIngress}}>
+          <select aria-label="Ingress port" {{on "change" this.setIngress}}>
             {{#each this.ingressNames as |n|}}<option
                 value={{n}}
               >{{n}}</option>{{/each}}
           </select>
         </div>
         <div class="cg-panel__row"><span>Pairing</span>
-          <select {{on "change" this.setMode}}>
+          <select aria-label="Pairing" {{on "change" this.setMode}}>
             <option value="fan">every source → every target</option>
             <option value="zip">pair one-to-one, in order</option>
           </select>

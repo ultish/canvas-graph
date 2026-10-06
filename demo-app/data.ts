@@ -3,7 +3,7 @@ import type { AssetInput, ConnectionInput, GraphInput } from '#src/index.ts';
 // Demo data in the shape your GraphQL model has: assets own input and output ports (objects with an id and a name),
 // connections point at port ids.
 
-interface Draft {
+export interface Draft {
   assets: AssetInput[];
   connections: ConnectionInput[];
 }
@@ -11,7 +11,7 @@ interface Draft {
 let seed = 11;
 const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
-const asset = (
+export const asset = (
   id: string,
   type: string,
   ins: string[],
@@ -25,7 +25,7 @@ const asset = (
   outputPorts: outs.map((n) => ({ id: `${id}:out:${n}`, name: n })),
 });
 
-const link = (
+export const link = (
   id: string,
   a: string,
   ap: string,
@@ -38,7 +38,7 @@ const link = (
 });
 
 /** 10 sources -> 1 switch -> N assets (three types) -> 1 aggregator -> 5 sinks */
-function fan(prefix: string, n: number, out: Draft): void {
+export function fan(prefix: string, n: number, out: Draft): void {
   const id = (s: string) => `${prefix}${s}`;
   for (let i = 0; i < 10; i++)
     out.assets.push(asset(id(`src${i}`), 'source', [], ['A']));
@@ -82,7 +82,7 @@ function fan(prefix: string, n: number, out: Draft): void {
 }
 
 /** a1 -> a2 -> a3 -> (fan of N) -> a4 -> a5 -> a2 (loop back); a2 -> a6 -> a7 -> a8; a1 -> a4 skips layers */
-function loop(prefix: string, n: number, out: Draft): void {
+export function loop(prefix: string, n: number, out: Draft): void {
   const names = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8'];
   const types = [
     'source',
@@ -117,11 +117,35 @@ function loop(prefix: string, n: number, out: Draft): void {
   }
 }
 
+/** A small pipeline that sits to the side: connected to each other, not to the rest. */
+export function side(prefix: string, types: string[], out: Draft): void {
+  types.forEach((t, i) =>
+    out.assets.push(asset(`${prefix}${i}`, t, ['1'], ['A'])),
+  );
+  for (let i = 0; i + 1 < types.length; i++)
+    out.connections.push(
+      link(`${prefix}l${i}`, `${prefix}${i}`, 'A', `${prefix}${i + 1}`, '1'),
+    );
+}
+
+/** Assets nothing is connected to yet. */
+export function stragglers(n: number, out: Draft): void {
+  const types = ['process', 'storage', 'sink', 'spare'];
+  for (let i = 0; i < n; i++)
+    out.assets.push(
+      asset(`spare-${i}`, types[i % types.length]!, ['1'], ['A']),
+    );
+}
+
 export function buildDemo(): GraphInput {
   const out: Draft = { assets: [], connections: [] };
   fan('fan1-', 800, out);
   loop('loop1-', 40, out);
   fan('fan2-', 400, out);
   loop('loop2-', 150, out);
+  side('side1-', ['source', 'ingest', 'store'], out);
+  side('side2-', ['source', 'route', 'enrich', 'sink'], out);
+  side('side3-', ['ingest', 'store'], out);
+  stragglers(45, out);
   return out;
 }

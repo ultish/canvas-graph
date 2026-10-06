@@ -45,6 +45,8 @@ jobs:
           cache: pnpm
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
+      - name: Engine tests
+        run: pnpm test:engine
       - name: Run Tests
         run: pnpm test
       # For the Try Scenarios

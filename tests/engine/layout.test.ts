@@ -5,7 +5,7 @@ import {
   routeEdges,
   portY,
 } from '../../src/-private/engine/layout.ts';
-import { fan, loop } from './fixtures.ts';
+import { asset, fan, link, loop } from './fixtures.ts';
 
 function build(...inputs: ReturnType<typeof fan>[]) {
   const store = new GraphStore();
@@ -121,5 +121,115 @@ describe('layout', () => {
     );
     expect(out.reduce((s, ge) => s + ge.count, 0)).toBe(30);
     expect(out.every((ge) => ge.laneY === undefined)).toBe(true);
+  });
+});
+
+describe('stragglers and side pipelines', () => {
+  const tiny = (p: string) => ({
+    assets: [asset(`${p}a`, 'x'), asset(`${p}b`, 'y'), asset(`${p}c`, 'z')],
+    connections: [
+      link(`${p}1`, `${p}a`, 'A', `${p}b`, '1'),
+      link(`${p}2`, `${p}b`, 'A', `${p}c`, '1'),
+    ],
+  });
+  const loose = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      asset(
+        `lone${i}`,
+        i % 3 === 0 ? 'process' : i % 3 === 1 ? 'sink' : 'spare',
+        [],
+        [],
+      ),
+    );
+  const boxOverlap = (
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number },
+  ) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+  it('gathers every asset with no connections into one block, a group per type, side by side', () => {
+    const input = fan(20);
+    const store = new GraphStore();
+    store.sync({
+      assets: [...input.assets, ...loose(60)],
+      connections: input.connections,
+    });
+    const { comps, groups } = layoutGraph(store.nodes, store.edgeList);
+    const lone = comps.filter((c) => c.kind === 'unconnected');
+    expect(lone).toHaveLength(1);
+    expect(lone[0]!.nodes).toHaveLength(60);
+    const g = groups.filter((x) => x.comp === lone[0]);
+    expect(g.map((x) => x.type).sort()).toEqual(['process', 'sink', 'spare']);
+    expect(new Set(g.map((x) => Math.round(x.y + x.h / 2))).size).toBe(1); // one row, centred on a shared baseline
+    expect(comps.filter((c) => c.kind === 'pipeline')).toHaveLength(1);
+  });
+
+  it('60 stragglers take a compact block, not 60 tall rows', () => {
+    const store = new GraphStore();
+    store.sync({
+      assets: [...fan(20).assets, ...loose(60)],
+      connections: fan(20).connections,
+    });
+    const { comps } = layoutGraph(store.nodes, store.edgeList);
+    const lone = comps.find((c) => c.kind === 'unconnected')!;
+    const main = comps.find((c) => c.kind === 'pipeline')!;
+    expect(lone.bbox.h).toBeLessThan(main.bbox.h * 2);
+    expect(lone.bbox.w).toBeLessThan(main.bbox.w * 2);
+  });
+
+  it('packs small side pipelines next to each other, and keeps big ones in their own row', () => {
+    const big = fan(300, 'big-');
+    const t1 = tiny('t1');
+    const t2 = tiny('t2');
+    const t3 = tiny('t3');
+    const store = new GraphStore();
+    store.sync({
+      assets: [...big.assets, ...t1.assets, ...t2.assets, ...t3.assets],
+      connections: [
+        ...big.connections,
+        ...t1.connections,
+        ...t2.connections,
+        ...t3.connections,
+      ],
+    });
+    const { comps } = layoutGraph(store.nodes, store.edgeList);
+    expect(comps).toHaveLength(4);
+    const [bigC, ...smalls] = comps;
+    const rows = new Set(smalls.map((c) => Math.round(c.bbox.y)));
+    expect(rows.size).toBe(1); // the three tiny pipelines share a row
+    expect(smalls[0]!.bbox.y).toBeGreaterThan(bigC!.bbox.y + bigC!.bbox.h - 1); // below the big pipeline, not on top of it
+    for (let i = 0; i < comps.length; i++)
+      for (let j = i + 1; j < comps.length; j++)
+        expect(boxOverlap(comps[i]!.bbox, comps[j]!.bbox)).toBe(false);
+  });
+
+  it('a group of assets connected to each other but not to the rest is its own pipeline beside the main one', () => {
+    const store = new GraphStore();
+    const side = tiny('side-');
+    store.sync({
+      assets: [...fan(40).assets, ...side.assets],
+      connections: [...fan(40).connections, ...side.connections],
+    });
+    const { comps } = layoutGraph(store.nodes, store.edgeList);
+    expect(comps.map((c) => c.kind)).toEqual(['pipeline', 'pipeline']);
+    expect(boxOverlap(comps[0]!.bbox, comps[1]!.bbox)).toBe(false);
+    const sideC = comps.find((c) => c.nodes.some((n) => n.id === 'side-a'))!;
+    expect(sideC.nodes).toHaveLength(3);
+    expect(sideC.bbox.w).toBeLessThan(comps[0]!.bbox.w);
+  });
+
+  it('is idempotent with stragglers and packed pipelines in the mix', () => {
+    const store = new GraphStore();
+    store.sync({
+      assets: [...fan(30).assets, ...tiny('t').assets, ...loose(12)],
+      connections: [...fan(30).connections, ...tiny('t').connections],
+    });
+    const first = layoutGraph(store.nodes, store.edgeList);
+    const pos = store.nodes.map((n) => [n.id, n.x, n.y, n.layer] as const);
+    layoutGraph(store.nodes, store.edgeList);
+    expect(store.nodes.map((n) => [n.id, n.x, n.y, n.layer] as const)).toEqual(
+      pos,
+    );
+    expect(first.comps.length).toBe(3);
+    expect(overlaps(first.groups)).toBe(0);
   });
 });

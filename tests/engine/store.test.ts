@@ -278,3 +278,33 @@ describe('local (gesture) connections', () => {
     expect(short.ins[e.bi]).toBe(e.tp); // existing connections keep pointing at the right row
   });
 });
+
+describe('stragglers joining the graph', () => {
+  it('an unconnected asset that gets its first connection needs a relayout; one more connection does not', () => {
+    const input = loop();
+    const lone = asset('lone', 'process');
+    const withLone: GraphInput = {
+      assets: [...input.assets, lone],
+      connections: input.connections,
+    };
+    const store = laidOut(withLone);
+    expect(store.assets.get('lone')!.g!.key.startsWith('unconnected')).toBe(
+      true,
+    );
+    const first = store.sync({
+      ...withLone,
+      connections: [...input.connections, link('j1', 'a8', 'B', 'lone', '1')],
+    });
+    expect(first.structural).toBe(true);
+    const second = store.sync({
+      ...withLone,
+      connections: [
+        ...input.connections,
+        link('j1', 'a8', 'B', 'lone', '1'),
+        link('j2', 'a7', 'B', 'lone', '1'),
+      ],
+    });
+    expect(second.structural).toBe(false);
+    expect(second.routing).toBe(true);
+  });
+});

@@ -17,6 +17,8 @@ export interface SyncResult {
     changed: number;
     removed: number;
     promoted: number;
+    /** Same wire, new id (an optimistic response swapping its temporary id for the real one). */
+    renamed: number;
     dangling: number;
   };
   /** Added/removed assets, a changed type, or a card that outgrew its cell: positions must be recomputed. */
@@ -29,6 +31,8 @@ export interface SyncResult {
   visited: number;
   /** Local (gesture-created) connections that the host's data now echoes back: [local id, real id]. */
   promoted: Array<[string, string]>;
+  /** Connections the host's data just stopped marking pending (saved): they get the settle pulse. */
+  settled: string[];
 }
 
 const edgeKey = (aId: string, fpId: string, bId: string, tpId: string) =>
@@ -238,6 +242,7 @@ export class GraphStore {
         changed: 0,
         removed: 0,
         promoted: 0,
+        renamed: 0,
         dangling: 0,
       },
       structural: false,
@@ -245,6 +250,7 @@ export class GraphStore {
       visual: false,
       visited: 0,
       promoted: [],
+      settled: [],
     };
     const doomed = new Set<Edge>();
 
@@ -328,6 +334,7 @@ export class GraphStore {
         const enabled = raw.enabled !== false;
         const pending = !!raw.pending;
         if (e.enabled !== enabled || e.pending !== pending) {
+          if (e.pending && !pending) res.settled.push(e.id);
           e.enabled = enabled;
           e.pending = pending;
           res.connections.changed++;
@@ -356,20 +363,56 @@ export class GraphStore {
       if (e) this.edgesById.delete(e.id);
       this.pendingNew.push({ raw, a, fp, b, tp });
       res.connections.added++;
+    }
+    const missing: Edge[] = [];
+    for (const e of this.edgeList)
+      if (!e.local && !seenE.has(e.id)) missing.push(e);
+    if (missing.length && this.pendingNew.length) {
+      // an optimistic response swaps a temporary id for the real one: the same wire under a new id is a rename
+      const byKey = new Map(
+        missing.map((e) => [edgeKey(e.a.id, e.fp.id, e.b.id, e.tp.id), e]),
+      );
+      this.pendingNew = this.pendingNew.filter((p) => {
+        const key = edgeKey(p.a.id, p.fp.id, p.b.id, p.tp.id);
+        const old = byKey.get(key);
+        if (!old) return true;
+        byKey.delete(key);
+        missing.splice(missing.indexOf(old), 1);
+        this.edgesById.delete(old.id);
+        old.id = p.raw.id;
+        old.raw = p.raw;
+        this.edgesById.set(old.id, old);
+        const enabled = p.raw.enabled !== false;
+        const pending = !!p.raw.pending;
+        if (old.pending && !pending) res.settled.push(old.id);
+        if (old.enabled !== enabled || old.pending !== pending)
+          res.visual = true;
+        old.enabled = enabled;
+        old.pending = pending;
+        res.connections.renamed++;
+        res.connections.added--;
+        return false;
+      });
+    }
+    if (this.pendingNew.length) res.routing = res.visual = true;
+    for (const e of missing) {
+      doomed.add(e);
+      res.connections.removed++;
       res.routing = res.visual = true;
     }
-    for (const e of this.edgeList)
-      if (!e.local && !seenE.has(e.id)) {
-        doomed.add(e);
-        res.connections.removed++;
-        res.routing = res.visual = true;
-      }
     if (doomed.size) {
       this.removeEdges(doomed);
       res.routing = res.visual = true;
     }
-    for (const p of this.pendingNew)
+    for (const p of this.pendingNew) {
+      // an asset getting its first connection leaves the unconnected block (and may join a pipeline): positions change
+      if (
+        (!p.a.in.length && !p.a.out.length) ||
+        (!p.b.in.length && !p.b.out.length)
+      )
+        res.structural = true;
       this.makeEdge(p.raw.id, p.a, p.fp, p.b, p.tp, p.raw, false);
+    }
     this.pendingNew.length = 0;
     return res;
   }

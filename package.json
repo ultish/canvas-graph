@@ -1,11 +1,16 @@
 {
   "name": "canvas-graph",
   "version": "0.0.0",
-  "description": "The default blueprint for Embroider v2 addons.",
+  "description": "A canvas topology graph for Ember: thousands of assets, fat pipes when zoomed out, named ports and animated wiring when zoomed in. No GPU needed.",
   "keywords": [
-    "ember-addon"
+    "ember-addon",
+    "canvas",
+    "graph",
+    "topology",
+    "ember",
+    "glimmer"
   ],
-  "repository": "",
+  "repository": "git+https://github.com/ultish/canvas-graph.git",
   "license": "MIT",
   "author": "",
   "imports": {
@@ -45,7 +50,8 @@
     "start": "vite dev",
     "test": "vite build --mode=development --out-dir dist-tests && testem --file testem.cjs ci --port 0",
     "test:engine": "vitest run",
-    "test:engine:watch": "vitest"
+    "test:engine:watch": "vitest",
+    "build:demo": "vite build --outDir dist-demo"
   },
   "dependencies": {
     "@embroider/addon-shim": "^1.8.9",
@@ -104,9 +110,19 @@
   "ember-addon": {
     "version": 2,
     "type": "addon",
-    "main": "addon-main.cjs"
+    "main": "addon-main.cjs",
+    "app-js": {
+      "./components/graph-canvas.js": "./dist/_app_/components/graph-canvas.js",
+      "./components/graph-connect-dialog.js": "./dist/_app_/components/graph-connect-dialog.js",
+      "./components/graph-inspector.js": "./dist/_app_/components/graph-inspector.js",
+      "./modifiers/graph-canvas.js": "./dist/_app_/modifiers/graph-canvas.js"
+    }
   },
   "peerDependencies": {
     "ember-source": ">= 6.0.0"
+  },
+  "homepage": "https://ultish.github.io/canvas-graph/",
+  "bugs": {
+    "url": "https://github.com/ultish/canvas-graph/issues"
   }
 }

@@ -232,6 +232,26 @@ export class Renderer {
       ctx.font = `600 ${fs}px ${FONT}`;
       ctx.fillText(`${g.type} ×${g.nodes.length}`, x + 10, y - fs * 0.35);
     }
+    for (const c of eng.comps) {
+      // the block of assets that have no connections gets a heading
+      if (c.kind !== 'unconnected') continue;
+      if (
+        c.bbox.x > b.x1 ||
+        c.bbox.y > b.y1 ||
+        c.bbox.x + c.bbox.w < b.x0 ||
+        c.bbox.y + c.bbox.h < b.y0
+      )
+        continue;
+      const fs = Math.max(18, 13 / s);
+      ctx.globalAlpha = frameA * 0.7;
+      ctx.fillStyle = '#8a8a96';
+      ctx.font = `600 ${fs}px ${FONT}`;
+      ctx.fillText(
+        `unconnected assets ×${c.nodes.length}`,
+        c.bbox.x + PAD,
+        c.bbox.y - fs * 1.5,
+      );
+    }
     const ha = frameA * (1 - smooth(0.45, 0.6, s)); // drag handles: egress on the right edge, ingress on the left
     if (ha > 0.02) {
       for (const g of eng.groups) {
