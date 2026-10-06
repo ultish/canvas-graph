@@ -1,15 +1,118 @@
-html,
-body {
+@import "tailwindcss";
+
+@plugin 'daisyui' {
+  themes:
+    light --default,
+    dark --prefersdark,
+    cupcake,
+    forest,
+    nord,
+    business,
+    dracula,
+    lemonade;
+}
+
+@source "./**/*.{gts,gjs,ts,js}";
+
+/*
+ * canvas-graph theming. The canvas draws its own pixels, so it reads these custom properties from its element
+ * (they inherit from here) instead of being styled by selectors. Mapping them onto DaisyUI's variables is all it takes
+ * for every DaisyUI theme to apply to the canvas, the inspector and the dialog at once.
+ */
+:root {
+  --cg-bg: var(--color-base-100);
+  --cg-card: var(--color-base-200);
+  --cg-card-border: var(--color-base-300);
+  --cg-text: var(--color-base-content);
+  --cg-text-muted: color-mix(
+    in oklab,
+    var(--color-base-content) 55%,
+    var(--color-base-100)
+  );
+  --cg-text-soft: color-mix(
+    in oklab,
+    var(--color-base-content) 78%,
+    var(--color-base-100)
+  );
+  --cg-label: var(--color-base-content);
+  --cg-ok: var(--color-success);
+  --cg-bad: var(--color-error);
+  --cg-highlight: var(--color-base-content);
+
+  --cg-panel-bg: color-mix(in oklab, var(--color-base-100) 94%, transparent);
+  --cg-panel-border: var(--color-base-300);
+  --cg-panel-rule: var(--color-base-300);
+  --cg-panel-text: var(--color-base-content);
+  --cg-panel-title: var(--color-base-content);
+  --cg-panel-muted: color-mix(
+    in oklab,
+    var(--color-base-content) 55%,
+    var(--color-base-100)
+  );
+  --cg-control-bg: var(--color-base-200);
+  --cg-control-border: var(--color-base-300);
+  --cg-control-text: var(--color-base-content);
+  --cg-danger: var(--color-error);
+  --cg-danger-bg: color-mix(
+    in oklab,
+    var(--color-error) 14%,
+    var(--color-base-100)
+  );
+  --cg-danger-border: color-mix(
+    in oklab,
+    var(--color-error) 45%,
+    var(--color-base-100)
+  );
+  --cg-ok-text: var(--color-success);
+  --cg-ok-bg: color-mix(
+    in oklab,
+    var(--color-success) 14%,
+    var(--color-base-100)
+  );
+  --cg-ok-border: color-mix(
+    in oklab,
+    var(--color-success) 45%,
+    var(--color-base-100)
+  );
+
+  --muted: color-mix(in oklab, var(--color-base-content) 62%, transparent);
+  --cb-sticky: 4.5rem;
+}
+
+html {
   height: 100%;
-  margin: 0;
-  background: #0b0b0e;
-  color: #c4c4d0;
+  background: var(--color-base-200);
+  color: var(--color-base-content);
   font:
     13px -apple-system,
     system-ui,
     sans-serif;
+  scroll-behavior: smooth;
+  scroll-padding-top: var(--cb-sticky);
 }
 
+body {
+  height: 100%;
+  margin: 0;
+}
+
+/* controls: DaisyUI components, applied by selector so the templates stay plain */
+.demo__bar button,
+.cb-live button {
+  @apply btn btn-xs;
+}
+
+.demo__bar select,
+.cb-live select {
+  @apply select select-xs w-auto;
+}
+
+.demo__bar input[type="checkbox"],
+.cb-live input[type="checkbox"] {
+  @apply checkbox checkbox-xs;
+}
+
+/* ---- landing page ----------------------------------------------------------------------------------------- */
 .demo {
   display: grid;
   grid-template-rows: auto 1fr;
@@ -22,24 +125,25 @@ body {
   align-items: center;
   gap: 8px 12px;
   padding: 8px 12px;
-  border-bottom: 1px solid #1c1c24;
-  background: #101015;
+  border-bottom: 1px solid var(--color-base-300);
+  background: var(--color-base-100);
 }
 
-.demo__bar button,
-.demo__bar select {
-  padding: 4px 10px;
-  border: 1px solid #2a2a36;
-  border-radius: 6px;
-  background: #1a1a22;
-  color: #e6e6ee;
-  font: inherit;
-  cursor: pointer;
+.demo__bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.demo__link,
+.cb__back {
+  color: var(--color-primary);
+  text-decoration: none;
 }
 
 .demo__hud {
   flex-basis: 100%;
-  color: #8a8a96;
+  color: var(--muted);
   font:
     12px ui-monospace,
     monospace;
@@ -48,6 +152,7 @@ body {
 .demo__stage {
   position: relative;
   min-height: 0;
+  background: var(--color-base-100);
 }
 
 .demo__side {
@@ -59,24 +164,11 @@ body {
   gap: 10px;
 }
 
-/* landing page: the link to the cookbook */
-.demo__link {
-  color: #8ab4ff;
-  text-decoration: none;
-}
-
-/* ---- cookbook ---------------------------------------------------------------------------------------------- */
+/* ---- cookbook --------------------------------------------------------------------------------------------- */
 .cb {
-  --cb-sticky: 4.5rem;
   min-height: 100vh;
-  background: #0b0b0e;
-  color: #c4c4d0;
-  scroll-padding-top: var(--cb-sticky);
-}
-
-html {
-  scroll-behavior: smooth;
-  scroll-padding-top: 4.5rem;
+  background: var(--color-base-200);
+  color: var(--color-base-content);
 }
 
 .cb__header {
@@ -88,29 +180,29 @@ html {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 20px;
-  border-bottom: 1px solid #1c1c24;
-  background: #101015f2;
+  border-bottom: 1px solid var(--color-base-300);
+  background: color-mix(in oklab, var(--color-base-100) 95%, transparent);
   backdrop-filter: blur(6px);
+}
+
+.cb__tools {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .cb__eyebrow {
   margin: 0;
-  color: #6d6d7a;
+  color: var(--muted);
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.cb__home,
-.cb__back {
-  color: #f1f1f6;
+.cb__home {
+  color: var(--color-base-content);
   font-weight: 600;
   text-decoration: none;
-}
-
-.cb__back {
-  color: #8ab4ff;
-  font-weight: 400;
 }
 
 .cb__main {
@@ -121,14 +213,14 @@ html {
 
 .cb-intro h1 {
   margin: 0 0 12px;
-  color: #f1f1f6;
   font-size: 28px;
   letter-spacing: -0.01em;
 }
 
 .cb-intro p {
+  margin: 0 0 12px;
   line-height: 1.6;
-  color: #a8a8b6;
+  color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
 }
 
 .cb__toc {
@@ -139,43 +231,39 @@ html {
 }
 
 .cb__toc a {
-  padding: 3px 10px;
-  border: 1px solid #2a2a36;
+  @apply btn btn-xs btn-ghost;
+  border: 1px solid var(--color-base-300);
   border-radius: 999px;
-  color: #c4c4d0;
-  font-size: 12px;
-  text-decoration: none;
 }
 
 .cb-section {
   margin-top: 48px;
   padding-top: 32px;
-  border-top: 1px solid #1c1c24;
+  border-top: 1px solid var(--color-base-300);
 }
 
 .cb-section h2 {
   margin: 0 0 6px;
-  color: #f1f1f6;
   font-size: 20px;
 }
 
 .cb-blurb {
   margin: 0 0 14px;
-  color: #8a8a96;
+  color: var(--muted);
   font-size: 14px;
   line-height: 1.55;
 }
 
 .cb-live {
   padding: 14px;
-  border: 1px solid #1f1f28;
+  border: 1px solid var(--color-base-300);
   border-radius: 10px;
-  background: #0f0f14;
+  background: var(--color-base-100);
 }
 
 .cb-label {
   margin: 0 0 10px;
-  color: #6d6d7a;
+  color: var(--muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -185,9 +273,9 @@ html {
 .cb-stage {
   position: relative;
   height: 340px;
-  border: 1px solid #1f1f28;
+  border: 1px solid var(--color-base-300);
   border-radius: 8px;
-  background: #0b0b0e;
+  background: var(--color-base-100);
   overflow: hidden;
 }
 
@@ -212,73 +300,58 @@ html {
   font-size: 13px;
 }
 
-.cb-live button,
-.cb-live select {
-  padding: 4px 10px;
-  border: 1px solid #2a2a36;
-  border-radius: 6px;
-  background: #1a1a22;
-  color: #e6e6ee;
-  font: inherit;
-  cursor: pointer;
-}
-
 .cb-hint {
   margin: 10px 0 0;
-  color: #8a8a96;
+  color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
 }
 
 .cb-stat {
   margin: 0 0 6px;
-  color: #e6e6ee;
   font:
     12px ui-monospace,
     monospace;
 }
 
-.cb-json {
-  max-height: 220px;
-  margin: 10px 0 0;
-  padding: 10px 12px;
-  overflow: auto;
-  border-radius: 8px;
-  background: #14141a;
-  color: #a8e0b4;
-  font:
-    12px/1.45 ui-monospace,
-    monospace;
-}
-
+.cb-json,
 .cb-log {
-  min-height: 1.4em;
   margin: 10px 0 0;
-  padding: 8px 12px 8px 28px;
   border-radius: 8px;
-  background: #14141a;
-  color: #a8a8b6;
+  background: var(--color-base-200);
   font:
     12px/1.5 ui-monospace,
     monospace;
 }
 
+.cb-json {
+  max-height: 220px;
+  padding: 10px 12px;
+  overflow: auto;
+  color: var(--color-success);
+}
+
+.cb-log {
+  min-height: 1.4em;
+  padding: 8px 12px 8px 28px;
+  color: color-mix(in oklab, var(--color-base-content) 75%, transparent);
+}
+
 .cb-log__empty {
-  color: #6d6d7a;
-  list-style: none;
   margin-left: -14px;
+  list-style: none;
+  color: var(--muted);
 }
 
 .cb-code {
   margin-top: 12px;
-  border: 1px solid #1f1f28;
+  border: 1px solid var(--color-base-300);
   border-radius: 10px;
-  background: #101015;
+  background: var(--color-base-100);
 }
 
 .cb-code summary {
   padding: 10px 14px;
-  color: #c4c4d0;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -289,16 +362,22 @@ html {
   margin: 0;
   padding: 12px 14px;
   overflow: auto;
-  border-top: 1px solid #1f1f28;
-  color: #d4d4e0;
+  border-top: 1px solid var(--color-base-300);
+  background: var(--color-base-200);
   font:
     12px/1.55 ui-monospace,
     monospace;
 }
 
 .cb code {
-  color: #c9c9ee;
   font:
     12px ui-monospace,
     monospace;
+}
+
+.theme-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
 }

@@ -87,7 +87,7 @@ export default class GraphCanvasModifier extends Modifier<Signature> {
       onFrame: (s) => this.args.onFrame?.(s),
     });
     const interaction = new Interaction(canvas, engine, renderer);
-    const handle = new GraphHandle(engine);
+    const handle = new GraphHandle(engine, () => renderer.refreshTheme());
     this.engine = engine;
     this.renderer = renderer;
     this.handle = handle;
@@ -104,12 +104,24 @@ export default class GraphCanvasModifier extends Modifier<Signature> {
     const ro = new ResizeObserver(fit);
     ro.observe(element);
 
+    // the canvas reads its colours from CSS custom properties: redraw when the page's theme changes
+    const retheme = () => renderer.refreshTheme();
+    const mo = new MutationObserver(retheme);
+    mo.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'class', 'style'],
+    });
+    const scheme = window.matchMedia('(prefers-color-scheme: dark)');
+    scheme.addEventListener('change', retheme);
+
     // Always-on listeners keep the handle's tracked selection current; the host's callbacks are bound in apply().
     engine.on('select', (p) => this.later(() => (handle.selection = p)), {
       passive: true,
     });
     registerDestructor(this, () => {
       ro.disconnect();
+      mo.disconnect();
+      scheme.removeEventListener('change', retheme);
       interaction.destroy();
       renderer.destroy();
       for (const b of this.bound.values()) b.off();

@@ -1,4 +1,14 @@
-/* Headless by default: the canvas draws itself. This file only styles the optional inspector and connect dialog. */
+/*
+ * Headless by default: the canvas draws itself. This file styles only the optional inspector and connect dialog.
+ *
+ * Theming: every colour is a CSS custom property with a dark default. Set them on :root, on [data-theme], or on any
+ * wrapper (they inherit). The canvas reads its own set (--cg-bg, --cg-card, ...; see the README) from the same place,
+ * so one mapping themes both. With DaisyUI, for instance:  --cg-bg: var(--color-base-100);
+ *
+ *   panels:   --cg-panel-bg --cg-panel-border --cg-panel-rule --cg-panel-text --cg-panel-title --cg-panel-muted
+ *   controls: --cg-control-bg --cg-control-border --cg-control-text
+ *   actions:  --cg-danger --cg-danger-bg --cg-danger-border   --cg-ok-text --cg-ok-bg --cg-ok-border
+ */
 .cg-root {
   position: relative;
   width: 100%;
@@ -8,24 +18,13 @@
 }
 
 .cg-panel {
-  --cg-bg: #14141aee;
-  --cg-border: #262630;
-  --cg-text: #c4c4d0;
-  --cg-title: #f1f1f6;
-  --cg-muted: #6d6d7a;
-  --cg-danger: #ff8a98;
-  --cg-danger-bg: #2a1519;
-  --cg-danger-border: #5a2630;
-  --cg-ok: #7de08a;
-  --cg-ok-bg: #12261b;
-  --cg-ok-border: #1f5a3a;
   box-sizing: border-box;
   width: 272px;
   padding: 12px 14px;
-  border: 1px solid var(--cg-border);
+  border: 1px solid var(--cg-panel-border, #262630);
   border-radius: 10px;
-  background: var(--cg-bg);
-  color: var(--cg-text);
+  background: var(--cg-panel-bg, #14141aee);
+  color: var(--cg-panel-text, #c4c4d0);
   font:
     13px -apple-system,
     system-ui,
@@ -34,7 +33,7 @@
 
 .cg-panel__title {
   margin-bottom: 8px;
-  color: var(--cg-title);
+  color: var(--cg-panel-title, #f1f1f6);
   font-weight: 600;
 }
 
@@ -43,11 +42,11 @@
   justify-content: space-between;
   gap: 12px;
   padding: 4px 0;
-  border-top: 1px solid #1f1f28;
+  border-top: 1px solid var(--cg-panel-rule, #1f1f28);
 }
 
 .cg-panel__row > span {
-  color: var(--cg-muted);
+  color: var(--cg-panel-muted, #6d6d7a);
   white-space: nowrap;
 }
 
@@ -60,10 +59,10 @@
 .cg-panel select {
   max-width: 150px;
   padding: 3px 6px;
-  border: 1px solid #2a2a36;
+  border: 1px solid var(--cg-control-border, #2a2a36);
   border-radius: 6px;
-  background: #1a1a22;
-  color: #e6e6ee;
+  background: var(--cg-control-bg, #1a1a22);
+  color: var(--cg-control-text, #e6e6ee);
 }
 
 .cg-panel__actions {
@@ -75,10 +74,10 @@
 
 .cg-panel button {
   padding: 8px;
-  border: 1px solid #2a2a36;
+  border: 1px solid var(--cg-control-border, #2a2a36);
   border-radius: 8px;
-  background: #1a1a22;
-  color: var(--cg-text);
+  background: var(--cg-control-bg, #1a1a22);
+  color: var(--cg-control-text, #c4c4d0);
   font:
     600 13px -apple-system,
     system-ui,
@@ -92,13 +91,13 @@
 }
 
 .cg-panel button.cg-danger {
-  border-color: var(--cg-danger-border);
-  background: var(--cg-danger-bg);
-  color: var(--cg-danger);
+  border-color: var(--cg-danger-border, #5a2630);
+  background: var(--cg-danger-bg, #2a1519);
+  color: var(--cg-danger, #ff8a98);
 }
 
 .cg-panel button.cg-ok {
-  border-color: var(--cg-ok-border);
-  background: var(--cg-ok-bg);
-  color: var(--cg-ok);
+  border-color: var(--cg-ok-border, #1f5a3a);
+  background: var(--cg-ok-bg, #12261b);
+  color: var(--cg-ok-text, #7de08a);
 }

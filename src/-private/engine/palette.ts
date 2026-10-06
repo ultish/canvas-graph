@@ -2,7 +2,7 @@
 // overrides for the types you want to pin. No reds: red means degraded. Always '#rrggbb': the renderer appends alpha as two hex digits.
 const PALETTE = [
   '#ffd24a',
-  '#ff7a59',
+  '#ffa040',
   '#b05cff',
   '#2fe6e6',
   '#ff4fa3',

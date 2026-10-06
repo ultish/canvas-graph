@@ -2,6 +2,7 @@ import { ringR, smooth } from './constants.ts';
 import type { GraphEngine } from './engine.ts';
 import { PAD, portY } from './layout.ts';
 import { Palette } from './palette.ts';
+import { DARK, resolveTheme, type Theme } from './theme.ts';
 import { edgeSegs, groupEdgeSegs, pipePx } from './routes.ts';
 import type { AssetNode, Cubic, Edge } from './types.ts';
 
@@ -22,6 +23,7 @@ export interface FrameStats {
 export interface RendererOptions {
   /** Pin colours for specific asset types ('#rrggbb'); every other type gets a stable colour. */
   colors?: Record<string, string>;
+  /** Overrides the theme's background colour. */
   background?: string;
   onFrame?: (stats: FrameStats) => void;
 }
@@ -51,7 +53,7 @@ export class Renderer {
   private stamp = 0;
   private wires = 0;
   private off: () => void;
-  private readonly background: string;
+  private theme: Theme = DARK;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -62,7 +64,7 @@ export class Renderer {
     if (!ctx) throw new Error('canvas-graph: 2D canvas is not available');
     this.ctx = ctx;
     this.palette = new Palette(opts.colors);
-    this.background = opts.background ?? '#0b0b0e';
+    this.refreshTheme();
     this.off = engine.on('invalidate', () => this.invalidate(), {
       passive: true,
     });
@@ -80,6 +82,25 @@ export class Renderer {
   invalidate(): void {
     this.dirty = true;
     this.request();
+  }
+
+  /**
+   * Re-read the theme from CSS (the `--cg-*` custom properties on the canvas element) and redraw. Called once at
+   * start, and by the modifier when the page's theme changes (`data-theme` on <html>, or the OS colour scheme).
+   */
+  refreshTheme(): void {
+    const style = getComputedStyle(this.canvas);
+    const probe = '#010203';
+    const valid = (c: string): boolean => {
+      const prev = this.ctx.fillStyle;
+      this.ctx.fillStyle = probe; // an invalid colour string is ignored, so the probe survives
+      this.ctx.fillStyle = c;
+      const ok = this.ctx.fillStyle !== probe;
+      this.ctx.fillStyle = prev;
+      return ok;
+    };
+    this.theme = resolveTheme((token) => style.getPropertyValue(token), valid);
+    this.invalidate();
   }
 
   private request(): void {
@@ -112,7 +133,7 @@ export class Renderer {
     const s = vp.s;
     const dpr = this.dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = this.background;
+    ctx.fillStyle = this.opts.background ?? this.theme.background;
     ctx.fillRect(0, 0, vp.width, vp.height);
     ctx.setTransform(dpr * s, 0, 0, dpr * s, -vp.x * s * dpr, -vp.y * s * dpr);
 
@@ -173,13 +194,13 @@ export class Renderer {
         ctx.lineWidth = pw * 1.8 + 5 / s;
         ctx.stroke();
         ctx.globalAlpha = pipeA;
-        ctx.strokeStyle = sel ? '#fff' : this.c(A.type);
+        ctx.strokeStyle = sel ? this.theme.highlight : this.c(A.type);
         ctx.lineWidth = Math.max(2 / s, pw * 0.35);
         ctx.stroke();
       }
       if (ge.edges.length > 1 && wpx > 3.5 && ge.laneY === undefined) {
         ctx.globalAlpha = pipeA;
-        ctx.fillStyle = '#e6e6ee';
+        ctx.fillStyle = this.theme.label;
         ctx.font = `600 ${13 / s}px ${FONT}`;
         ctx.textAlign = 'center';
         ctx.fillText(
@@ -228,7 +249,7 @@ export class Renderer {
       }
       const fs = Math.max(18, 13 / s);
       ctx.globalAlpha = frameA * (on ? 1 : 0.25);
-      ctx.fillStyle = '#e6e6ee';
+      ctx.fillStyle = this.theme.label;
       ctx.font = `600 ${fs}px ${FONT}`;
       ctx.fillText(`${g.type} ×${g.nodes.length}`, x + 10, y - fs * 0.35);
     }
@@ -244,7 +265,7 @@ export class Renderer {
         continue;
       const fs = Math.max(18, 13 / s);
       ctx.globalAlpha = frameA * 0.7;
-      ctx.fillStyle = '#8a8a96';
+      ctx.fillStyle = this.theme.textMuted;
       ctx.font = `600 ${fs}px ${FONT}`;
       ctx.fillText(
         `unconnected assets ×${c.nodes.length}`,
@@ -277,7 +298,7 @@ export class Renderer {
           ctx.arc(hx, hy, r, 0, 6.3);
           ctx.fill();
           ctx.globalAlpha = ha * 0.5;
-          ctx.strokeStyle = this.background;
+          ctx.strokeStyle = this.opts.background ?? this.theme.background;
           ctx.lineWidth = 1.5 / s;
           ctx.stroke();
         }
@@ -326,7 +347,7 @@ export class Renderer {
       c.dir > 0 ? ey : hy,
     );
     ctx.globalAlpha = 0.28;
-    ctx.strokeStyle = lock ? col : '#fff';
+    ctx.strokeStyle = lock ? col : this.theme.highlight;
     ctx.lineWidth = lw * 1.9;
     ctx.stroke();
     ctx.globalAlpha = 0.95;
@@ -335,7 +356,7 @@ export class Renderer {
     ctx.lineDashOffset = (-eng.time * 60) / s;
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = lock ? col : '#fff';
+    ctx.fillStyle = lock ? col : this.theme.highlight;
     ctx.beginPath();
     ctx.arc(ex, ey, 7 / s, 0, 6.3);
     ctx.fill();
@@ -358,7 +379,7 @@ export class Renderer {
     for (const n of vis) {
       const on = !dim || eng.selNodes.has(n);
       const k =
-        (n.status === 'degraded' ? '#ff5a5a' : this.c(n.type)) +
+        (n.status === 'degraded' ? this.theme.bad : this.c(n.type)) +
         (on ? '' : '|d');
       let arr = buckets.get(k);
       if (!arr) buckets.set(k, (arr = []));
@@ -399,7 +420,7 @@ export class Renderer {
         strokeSegs(ctx, edgeSegs(e));
       }
       ctx.globalAlpha = alpha * (pass ? 0.95 : 0.25);
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = this.theme.highlight;
       ctx.lineWidth = (pass ? 1.6 : 6) / s;
       ctx.stroke();
     }
@@ -453,7 +474,7 @@ export class Renderer {
               ? 0.6 + 0.22 * Math.sin(time * 5)
               : 1;
           ctx.globalAlpha = alpha * (on ? 1 : 0.08) * fade;
-          ctx.strokeStyle = e.deleting ? '#ff6b6b' : this.c(A.type);
+          ctx.strokeStyle = e.deleting ? this.theme.bad : this.c(A.type);
           ctx.lineWidth = lw;
           ctx.setLineDash(e.enabled ? [] : [14, 10]);
           ctx.beginPath();
@@ -484,7 +505,7 @@ export class Renderer {
       ctx.lineWidth = lw * 4;
       ctx.stroke();
       ctx.globalAlpha = alpha * 0.9;
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = this.theme.highlight;
       ctx.lineWidth = lw * 0.5;
       ctx.setLineDash([10, 26]);
       ctx.lineDashOffset = -time * 90;
@@ -502,7 +523,7 @@ export class Renderer {
       ctx.lineWidth = lw * (sel ? 7 : 5);
       ctx.stroke();
       ctx.globalAlpha = alpha;
-      ctx.strokeStyle = sel ? '#fff' : this.c(e.a.type);
+      ctx.strokeStyle = sel ? this.theme.highlight : this.c(e.a.type);
       ctx.lineWidth = lw * (sel ? 1.8 : 1.5);
       ctx.stroke();
     }
@@ -542,12 +563,12 @@ export class Renderer {
       ctx.shadowColor = col;
       ctx.shadowBlur = 50 * gg * Math.min(1, s * 2);
     }
-    ctx.fillStyle = '#17171d';
+    ctx.fillStyle = this.theme.card;
     ctx.beginPath();
     ctx.roundRect(n.x, n.y, n.w, n.h, 14);
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.strokeStyle = gg > 0.02 ? col : '#262630';
+    ctx.strokeStyle = gg > 0.02 ? col : this.theme.cardBorder;
     ctx.lineWidth = 1.5 + 1.5 * gg;
     ctx.stroke();
     if (pg > 0.02 && n.bt !== null) {
@@ -580,10 +601,10 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(n.x + 20, n.y + 26, 5, 0, 6.3);
     ctx.fill();
-    ctx.fillStyle = '#f1f1f6';
+    ctx.fillStyle = this.theme.text;
     ctx.font = `600 15px ${FONT}`;
     ctx.fillText(n.name, n.x + 34, n.y + 31);
-    ctx.fillStyle = '#6d6d7a';
+    ctx.fillStyle = this.theme.textMuted;
     ctx.font = `12px ${FONT}`;
     ctx.fillText(
       `${n.type} · in ${n.in.length} out ${n.out.length}`,
@@ -591,11 +612,11 @@ export class Renderer {
       n.y + 52,
     );
     const ok = n.status === 'ready';
-    ctx.fillStyle = ok ? '#7de08a' : '#ff6b6b';
+    ctx.fillStyle = ok ? this.theme.ok : this.theme.bad;
     ctx.beginPath();
     ctx.arc(n.x + 22, n.y + n.h - 14, 3.5, 0, 6.3);
     ctx.fill();
-    ctx.fillStyle = '#8f8f9c';
+    ctx.fillStyle = this.theme.textSoft;
     ctx.fillText(
       ok ? 'All inputs ready' : n.status === 'degraded' ? 'Degraded' : n.status,
       n.x + 34,
@@ -652,7 +673,7 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(x, y, 6, 0, 6.3);
     ctx.fill();
-    ctx.fillStyle = '#b4b4c2';
+    ctx.fillStyle = this.theme.textSoft;
     ctx.font = `600 12px ${FONT}`;
     ctx.textAlign = dir > 0 ? 'right' : 'left';
     ctx.fillText(label, x - dir * 14, y + 4);
@@ -666,7 +687,7 @@ export class Renderer {
       ctx.lineTo(x + dir * 90, y);
       ctx.stroke();
       if (hidden > 1) {
-        ctx.fillStyle = '#e6e6ee';
+        ctx.fillStyle = this.theme.label;
         ctx.font = `600 12px ${FONT}`;
         ctx.textAlign = dir > 0 ? 'left' : 'right';
         ctx.fillText(`+${hidden}`, x + dir * 98, y + 4);
@@ -699,7 +720,7 @@ export class Renderer {
         ctx.lineWidth = lw * 6;
         ctx.stroke();
         ctx.globalAlpha = k;
-        ctx.strokeStyle = '#fff';
+        ctx.strokeStyle = this.theme.highlight;
         ctx.lineWidth = lw * 1.4;
         ctx.stroke();
         const spring = 1 + 0.9 * Math.exp(-age * 5) * Math.cos(age * 20);
@@ -796,7 +817,7 @@ export class Renderer {
       c.dir > 0 ? ex : px,
       c.dir > 0 ? ey : py,
     );
-    const wc = conn?.snap ? col : '#fff';
+    const wc = conn?.snap ? col : this.theme.highlight;
     ctx.globalAlpha = 0.22 * fade;
     ctx.strokeStyle = wc;
     ctx.lineWidth = lw * 5;

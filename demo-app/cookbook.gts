@@ -1,6 +1,7 @@
 import { LinkTo } from '@ember/routing';
 import Component from '@glimmer/component';
 import CookbookSection from './components/cookbook-section.gts';
+import ThemeSelect from './components/theme-select.gts';
 import * as recipes from './cookbook/recipes.ts';
 import {
   ApolloUpdates,
@@ -37,7 +38,10 @@ export default class Cookbook extends Component {
           <p class="cb__eyebrow">Cookbook</p>
           <LinkTo @route="index" class="cb__home">canvas-graph</LinkTo>
         </div>
-        <LinkTo @route="index" class="cb__back">← the full demo</LinkTo>
+        <div class="cb__tools">
+          <ThemeSelect />
+          <LinkTo @route="index" class="cb__back">← the full demo</LinkTo>
+        </div>
       </header>
 
       <main class="cb__main">

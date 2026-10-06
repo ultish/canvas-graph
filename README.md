@@ -7,6 +7,7 @@ A topology canvas for Ember, for graphs of thousands of assets where a single sw
 ## Compatibility
 
 - Ember.js 6 or above, `.gts` components, TypeScript declarations included
+- Styling-agnostic: themeable with Tailwind/DaisyUI (the demo does), or plain CSS custom properties
 - Embroider v2 addon (Vite)
 
 ## Installation
@@ -103,6 +104,38 @@ handle.asset(id); // the asset and its ports as the canvas knows them
 ```
 
 `<GraphInspector>` and `<GraphConnectDialog>` are optional and replaceable: they only read `handle.selection` and listen passively to requests (a passive listener is never counted as "the host"). Pass `@onConnect={{this.save}}` to the dialog to receive the chosen pairings and persist them yourself.
+
+### Theming (Tailwind / DaisyUI / anything)
+
+The addon is headless: it ships no Tailwind and no DaisyUI. The canvas draws its own pixels, so instead of selectors it reads a small set of CSS custom properties from its own element (they inherit, so set them on `:root`, on `[data-theme]`, or on a wrapper) and falls back to a dark theme for anything you leave unset. Any CSS colour works, `oklch()` included. It redraws by itself when `data-theme` / `class` / `style` change on `<html>` or the OS colour scheme flips (`handle.refreshTheme()` if you switch themes some other way).
+
+| Token | What it colours |
+| --- | --- |
+| `--cg-bg` | the canvas background |
+| `--cg-card`, `--cg-card-border` | a card's fill and outline |
+| `--cg-text` | card titles |
+| `--cg-text-muted`, `--cg-text-soft` | subtitles; port names and footers |
+| `--cg-label` | pipe counts and group names |
+| `--cg-ok`, `--cg-bad` | healthy / degraded status (degraded assets, wires being deleted) |
+| `--cg-highlight` | the selected wire and the wire you are dragging (white on dark, dark on light) |
+
+Asset types get their own colours (stable per type name, never red, since red means degraded); pin some with `@colors`. The optional inspector and dialog read `--cg-panel-*`, `--cg-control-*`, `--cg-danger*` and `--cg-ok-*` (listed at the top of `canvas-graph.css`).
+
+With DaisyUI, mapping its variables is all it takes for every theme to apply to the canvas, the inspector and the dialog at once (this is what the demo does; see `demo-app/styles.css`, and use the theme picker in its header):
+
+```css
+:root {
+  --cg-bg: var(--color-base-100);
+  --cg-card: var(--color-base-200);
+  --cg-card-border: var(--color-base-300);
+  --cg-text: var(--color-base-content);
+  --cg-ok: var(--color-success);
+  --cg-bad: var(--color-error);
+  --cg-highlight: var(--color-base-content);
+  --cg-panel-bg: var(--color-base-100);
+  /* ... */
+}
+```
 
 ### Interaction
 

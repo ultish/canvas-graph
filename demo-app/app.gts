@@ -1,6 +1,9 @@
 import EmberApp from 'ember-strict-application-resolver';
 import EmberRouter from '@ember/routing/router';
 import PageTitleService from 'ember-page-title/services/page-title';
+import { initTheme } from './components/theme-select.gts';
+
+initTheme();
 
 class Router extends EmberRouter {
   location = 'history';

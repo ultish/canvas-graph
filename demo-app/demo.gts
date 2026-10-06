@@ -6,6 +6,7 @@ import { tracked } from '@glimmer/tracking';
 import GraphCanvas from '#src/components/graph-canvas.gts';
 import GraphConnectDialog from '#src/components/graph-connect-dialog.gts';
 import GraphInspector from '#src/components/graph-inspector.gts';
+import ThemeSelect from './components/theme-select.gts';
 import type { FrameStats, GraphHandle, SyncResult } from '#src/index.ts';
 import '#src/styles/canvas-graph.css';
 import { FakeBackend, type SaveMode } from './backend.ts';
@@ -80,6 +81,7 @@ export default class Demo extends Component {
       <header class="demo__bar">
         <strong>canvas-graph</strong>
         <LinkTo @route="cookbook" class="demo__link">Cookbook →</LinkTo>
+        <ThemeSelect />
         <button type="button" {{on "click" this.fit}}>Fit all</button>
         <button type="button" {{on "click" (fn this.pipeline 0)}}>Pipeline 1</button>
         <button type="button" {{on "click" (fn this.pipeline 1)}}>2</button>

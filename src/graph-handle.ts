@@ -24,7 +24,10 @@ export class GraphHandle {
   /** What is selected right now, as plain data (or null). */
   @tracked selection: SelectionPayload | null = null;
 
-  constructor(private readonly engine: GraphEngine) {}
+  constructor(
+    private readonly engine: GraphEngine,
+    private readonly onRefreshTheme: () => void = () => undefined,
+  ) {}
 
   /** Subscribe to engine events. `passive` listeners (inspectors, dialogs) are not counted as the host's request handler. */
   on<K extends keyof EngineEvents>(
@@ -120,6 +123,11 @@ export class GraphHandle {
   /** Highlight the whole upstream/downstream path of the selected asset, not just its direct connections. */
   setFullPath(on: boolean): void {
     this.engine.setFullPath(on);
+  }
+
+  /** Re-read the `--cg-*` theme tokens. Automatic when `data-theme` on <html> or the OS colour scheme changes; call it if you switch themes some other way. */
+  refreshTheme(): void {
+    this.onRefreshTheme();
   }
 
   fit(): void {
