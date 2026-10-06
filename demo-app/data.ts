@@ -137,11 +137,12 @@ export function stragglers(n: number, out: Draft): void {
     );
 }
 
-export function buildDemo(): GraphInput {
+/** The landing page's graph. `?assets=N` in the URL sets the size of the big fan (default 800; try 5000 or 20000). */
+export function buildDemo(big = 800): GraphInput {
   const out: Draft = { assets: [], connections: [] };
-  fan('fan1-', 800, out);
+  fan('fan1-', big, out);
   loop('loop1-', 40, out);
-  fan('fan2-', 400, out);
+  fan('fan2-', Math.round(big / 2), out);
   loop('loop2-', 150, out);
   side('side1-', ['source', 'ingest', 'store'], out);
   side('side2-', ['source', 'route', 'enrich', 'sink'], out);

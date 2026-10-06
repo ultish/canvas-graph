@@ -17,7 +17,11 @@ import { buildDemo } from './data.ts';
  * `useQuery(...).data` would be.
  */
 export default class Demo extends Component {
-  backend = new FakeBackend(buildDemo());
+  backend = new FakeBackend(
+    buildDemo(
+      Number(new URLSearchParams(location.search).get('assets')) || 800,
+    ),
+  );
   @tracked handle: GraphHandle | undefined;
   @tracked fullPath = false;
   @tracked live = false;
@@ -81,6 +85,7 @@ export default class Demo extends Component {
       <header class="demo__bar">
         <strong>canvas-graph</strong>
         <LinkTo @route="cookbook" class="demo__link">Cookbook →</LinkTo>
+        <LinkTo @route="bench" class="demo__link">Benchmark →</LinkTo>
         <ThemeSelect />
         <button type="button" {{on "click" this.fit}}>Fit all</button>
         <button type="button" {{on "click" (fn this.pipeline 0)}}>Pipeline 1</button>

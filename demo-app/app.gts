@@ -40,4 +40,5 @@ export class App extends EmberApp {
 
 Router.map(function () {
   this.route('cookbook');
+  this.route('bench');
 });

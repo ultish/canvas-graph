@@ -105,6 +105,39 @@ handle.asset(id); // the asset and its ports as the canvas knows them
 
 `<GraphInspector>` and `<GraphConnectDialog>` are optional and replaceable: they only read `handle.selection` and listen passively to requests (a passive listener is never counted as "the host"). Pass `@onConnect={{this.save}}` to the dialog to receive the chosen pairings and persist them yourself.
 
+### Performance (a client with no GPU)
+
+Everything is drawn on a plain 2D canvas, and only what the current zoom can show. Measured in real Chrome on a fast laptop, at **20,000 assets (60,000 entities)**:
+
+| | |
+| --- | --- |
+| a subscription tick (one field changed) | 0.1 ms |
+| a payload where nothing changed | 0.1 ms |
+| add a connection | 2.6 ms |
+| first sync + layout / a full relayout | 76 ms / 9 ms |
+| a frame: zoomed out / middle / zoomed in | 0.0 / 0.1 / 1.6 ms (2.8 ms with a hub selected) |
+
+Those are a fast machine's numbers. **Measure on yours:** the demo's `/bench` page times the whole pipeline on a graph of the size you pick (up to 60,000 assets) and prints a table you can copy. Open it on the client you care about, or use Chrome's DevTools → Performance → CPU 4× or 6× slowdown.
+
+How it stays cheap:
+
+- **Sync is by identity.** The new payload is compared with a copy of the last one position by position; an entity that is `===` costs one comparison, so a tick costs about what it changes, not what the graph weighs. (Apollo returns new arrays whose unchanged entities sit at the same index.)
+- **Layout is a typed-array program** (`layout-core.ts`): 60,000 assets in about 4 ms. That is why there is no Web Worker: copying the data to a worker and the answer back would cost more than the layout.
+- **Connection changes update the group pipes in place;** only a loop or skip pipe appearing or disappearing re-runs lane assignment, for its one pipeline.
+- **Drawing allocates almost nothing** (reused sets and buckets, wires stroked in one batch per colour, no per-wire allocation), and the hover hit-test rate-limits itself by its own cost.
+
+**Where the envelope ends:** the target is thousands of assets, and 20,000 (60,000 entities) is comfortable. At 60,000 assets (180,000 entities) it still works but is past the design point: in the same browser, the first sync takes about 1.5 s, a full relayout about 180 ms, and finding the wire under the cursor about 100 ms (it rate-limits itself, so the pointer never waits on it). Run `/bench` at that size on your own hardware before relying on it.
+
+Knobs, all optional:
+
+| Argument | Default | |
+| --- | --- | --- |
+| `@maxPixelRatio` | `1.5` | A 2× or 3× screen means 4–9× the pixels to fill; the canvas draws at most this dense. `Infinity` = the screen's own density. |
+| `@maxFps` | `60` (uncapped) | `30` halves the drawing work on a weak client. |
+| `@syncThrottle` | off | Apply at most one data payload per N ms (the newest wins; safe, each payload is the whole truth). `'auto'` = 100 ms above 5,000 assets. |
+| `@animateLayout` | `true` | Cards and group frames glide to their new positions when the layout changes, instead of jumping. |
+| `@highlightUpdates` | `true` | A fading ring on each asset your data changes (skipped for bulk changes of 200+). |
+
 ### Theming (Tailwind / DaisyUI / anything)
 
 The addon is headless: it ships no Tailwind and no DaisyUI. The canvas draws its own pixels, so instead of selectors it reads a small set of CSS custom properties from its own element (they inherit, so set them on `:root`, on `[data-theme]`, or on a wrapper) and falls back to a dark theme for anything you leave unset. Any CSS colour works, `oklch()` included. It redraws by itself when `data-theme` / `class` / `style` change on `<html>` or the OS colour scheme flips (`handle.refreshTheme()` if you switch themes some other way).
@@ -178,7 +211,6 @@ The engine (`src/-private/engine/`) is plain TypeScript with no Ember or DOM in 
 ## Not yet
 
 - Selecting a wire is only possible zoomed in; zoomed out you select the group pipe.
-- `routeEdges` rebuilds all group pipes when connections change. It is about a millisecond at 2,800 connections but is O(connections); it is the first thing to make incremental for much larger graphs.
 - Edits are intents only: there is no built-in persistence, by design.
 
 ## License

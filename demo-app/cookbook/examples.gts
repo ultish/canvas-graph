@@ -1,11 +1,17 @@
 import { on } from '@ember/modifier';
+import { LinkTo } from '@ember/routing';
 import type { TOC } from '@ember/component/template-only';
 import Component from '@glimmer/component';
 import { tracked } from '@glimmer/tracking';
 import GraphCanvas from '#src/components/graph-canvas.gts';
 import GraphConnectDialog from '#src/components/graph-connect-dialog.gts';
 import GraphInspector from '#src/components/graph-inspector.gts';
-import type { ConnectRequest, GraphHandle, SyncResult } from '#src/index.ts';
+import type {
+  ConnectRequest,
+  FrameStats,
+  GraphHandle,
+  SyncResult,
+} from '#src/index.ts';
 import '#src/styles/canvas-graph.css';
 import { FakeBackend, type SaveMode } from '../backend.ts';
 import { bulk, chain, layoutRules, medium } from '../samples.ts';
@@ -334,5 +340,76 @@ export class HandleApi extends Component {
         @data={{this.data}}
         @onReady={{this.ready}}
       /></div>
+  </template>
+}
+
+export class PerformanceKnobs extends Component {
+  backend = new FakeBackend(medium());
+  @tracked maxFps = 60;
+  @tracked ratio = 1.5;
+  @tracked live = false;
+  @tracked hud = 'move the view to see frame times';
+  private lastHud = 0;
+
+  willDestroy(): void {
+    super.willDestroy();
+    this.backend.destroy();
+  }
+
+  frame = (s: FrameStats): void => {
+    const now = performance.now();
+    if (now - this.lastHud < 250) return;
+    this.lastHud = now;
+    this.hud = `${s.mode} · ${s.ms.toFixed(1)} ms for that frame · ${s.assetsDrawn} assets drawn · cap ${this.maxFps} fps · pixel ratio ${this.ratio === Infinity ? 'native' : this.ratio}`;
+  };
+  setFps = (e: Event): void =>
+    void (this.maxFps = Number((e.target as HTMLSelectElement).value));
+  setRatio = (e: Event): void => {
+    const v = (e.target as HTMLSelectElement).value;
+    this.ratio = v === 'native' ? Infinity : Number(v);
+  };
+  toggle = (e: Event): void => {
+    this.live = (e.target as HTMLInputElement).checked;
+    this.backend.setLive(this.live);
+  };
+
+  <template>
+    <div class="cb-row">
+      <label class="cb-field">Frame cap
+        <select {{on "change" this.setFps}}>
+          <option value="60">60 fps</option>
+          <option value="30">30 fps</option>
+          <option value="15">15 fps</option>
+        </select>
+      </label>
+      <label class="cb-field">Pixel ratio
+        <select {{on "change" this.setRatio}}>
+          <option value="1.5">1.5 (default)</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="native">native</option>
+        </select>
+      </label>
+      <label class="cb-field"><input
+          type="checkbox"
+          checked={{this.live}}
+          {{on "change" this.toggle}}
+        />
+        Live updates (3 a second, each one ringed)</label>
+    </div>
+    <p class="cb-stat">{{this.hud}}</p>
+    <div class="cb-stage">
+      <GraphCanvas
+        @data={{this.backend.graph}}
+        @maxFps={{this.maxFps}}
+        @maxPixelRatio={{this.ratio}}
+        @onFrame={{this.frame}}
+      />
+    </div>
+    <p class="cb-hint">
+      Zoom in and pan, and watch the frame time. The full measurements, for any
+      graph size on your machine, are on the
+      <LinkTo @route="bench">benchmark page</LinkTo>.
+    </p>
   </template>
 }

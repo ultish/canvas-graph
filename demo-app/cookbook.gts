@@ -5,6 +5,7 @@ import ThemeSelect from './components/theme-select.gts';
 import * as recipes from './cookbook/recipes.ts';
 import {
   ApolloUpdates,
+  PerformanceKnobs,
   Colours,
   Connect,
   DeleteUndo,
@@ -24,6 +25,7 @@ const TOC = [
   { id: 'apollo', label: 'Apollo updates' },
   { id: 'group-connect', label: 'Bulk connect' },
   { id: 'delete', label: 'Delete & undo' },
+  { id: 'performance', label: 'Performance' },
   { id: 'handle', label: 'The handle' },
 ];
 
@@ -141,6 +143,15 @@ export default class Cookbook extends Component {
           @code={{this.recipes.deleteUndo}}
         >
           <DeleteUndo />
+        </CookbookSection>
+
+        <CookbookSection
+          @id="performance"
+          @title="Performance, for a client with no GPU"
+          @blurb="A handful of knobs, and the numbers behind them. The defaults are already conservative; measure on the real machine."
+          @code={{this.recipes.performance}}
+        >
+          <PerformanceKnobs />
         </CookbookSection>
 
         <CookbookSection

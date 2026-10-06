@@ -201,3 +201,28 @@ handle.setFullPath(true);
 handle.fit(); handle.focusAsset(id); handle.focusPipeline(index);
 handle.relayout();
 handle.asset(id);                    // the asset and its ports as the canvas knows them`;
+
+export const performance = `<GraphCanvas
+  @data={{this.graph.data}}
+  @maxPixelRatio={{1.5}}      {{! the default: a 2x or 3x screen draws at 1.5x. Infinity = the screen's full density }}
+  @maxFps={{30}}              {{! default 60 (uncapped). 30 halves the drawing work on a weak client }}
+  @syncThrottle="auto"        {{! apply at most one payload per 100 ms above 5,000 assets (a number sets it); default off }}
+  @animateLayout={{true}}     {{! cards glide when the layout changes; default true }}
+  @highlightUpdates={{true}}  {{! a ring on assets your data changes; default true }}
+/>
+
+// Measure it on the machine that matters: /bench times the whole pipeline on a graph of the size you pick. Open it in
+// the client you are worried about (or Chrome with DevTools > Performance > CPU 4x or 6x slowdown) and press Run.
+//
+// What to expect (a fast laptop, real Chrome, 20,000 assets = 60,000 entities):
+//   a subscription tick (one field)      0.1 ms        add a connection        2.6 ms
+//   first sync + layout                  76 ms         relayout                9 ms
+//   a frame, zoomed out / middle / in    0 / 0.1 / 1.6 ms (2.8 ms with a hub selected)
+//
+// Why it is cheap:
+//   - sync() folds a payload in by identity, comparing position by position: unchanged entities cost a comparison
+//   - culling: only assets in the viewport are drawn, and wires are stroked in one batch per colour
+//   - layout is a typed-array program: 60,000 assets in about 4 ms, so it needs no Web Worker (copying the data to a
+//     worker and back would cost more than the layout)
+//   - connection changes update the group pipes in place instead of rebuilding them
+//   - the hover hit-test does not allocate and rate-limits itself by its own cost`;

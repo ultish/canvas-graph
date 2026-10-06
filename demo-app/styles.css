@@ -381,3 +381,38 @@ body {
   gap: 6px;
   color: var(--muted);
 }
+
+/* ---- benchmark -------------------------------------------------------------------------------------------- */
+.bench {
+  width: 100%;
+  margin-top: 14px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.bench th,
+.bench td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-base-300);
+  text-align: right;
+}
+
+.bench th:first-child,
+.bench td:first-child,
+.bench .bench__note {
+  text-align: left;
+}
+
+.bench td {
+  font-variant-numeric: tabular-nums;
+}
+
+.bench__note {
+  color: var(--muted);
+}
+
+.bench__slow td:nth-child(2),
+.bench__slow td:nth-child(3) {
+  color: var(--color-warning);
+  font-weight: 600;
+}
