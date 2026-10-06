@@ -124,5 +124,6 @@
   "homepage": "https://ultish.github.io/canvas-graph/",
   "bugs": {
     "url": "https://github.com/ultish/canvas-graph/issues"
-  }
+  },
+  "packageManager": "pnpm@11.25.0"
 }
