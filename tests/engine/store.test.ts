@@ -308,3 +308,83 @@ describe('stragglers joining the graph', () => {
     expect(second.routing).toBe(true);
   });
 });
+
+describe('the steady-state fast path', () => {
+  it('still sees a payload array that was mutated in place and passed again', () => {
+    const input = loop();
+    const store = laidOut(input);
+    const assets = [...input.assets];
+    const connections = [...input.connections];
+    store.sync({ assets, connections });
+    assets.push(asset('late', 'process')); // same array object, new member
+    const r = store.sync({ assets, connections });
+    expect(r.assets.added).toBe(1);
+    expect(store.assets.has('late')).toBe(true);
+  });
+
+  it('a reordered payload is still a no-op for the model, and a swapped-in changed entity is found at its new position', () => {
+    const input = loop();
+    const store = laidOut(input);
+    const reversed = {
+      assets: [...input.assets].reverse(),
+      connections: [...input.connections].reverse(),
+    };
+    const r = store.sync(reversed);
+    expect(r.visited).toBe(0);
+    expect(r.structural || r.routing || r.visual).toBe(false);
+    const changed = {
+      ...reversed,
+      assets: reversed.assets.map((a) =>
+        a.id === 'a3' ? { ...a, status: 'degraded' } : a,
+      ),
+    };
+    const r2 = store.sync(changed);
+    expect(r2.visited).toBe(1);
+    expect(store.assets.get('a3')!.status).toBe('degraded');
+  });
+
+  it('a server edge the model lost locally comes back when the host still has it (the host wins)', () => {
+    const input = loop();
+    const store = laidOut(input);
+    store.sync({
+      assets: [...input.assets],
+      connections: [...input.connections],
+    });
+    store.removeEdges([store.edgesById.get('l23')!]); // e.g. a delete the host agreed to, before its data catches up
+    expect(store.edgesById.has('l23')).toBe(false);
+    const r = store.sync({
+      assets: [...input.assets],
+      connections: [...input.connections],
+    });
+    expect(r.connections.added).toBe(1);
+    expect(store.edgesById.has('l23')).toBe(true);
+  });
+
+  it('a flag change in place is found without the full path, and moving an endpoint falls back to it', () => {
+    const input = loop();
+    const store = laidOut(input);
+    store.sync({
+      assets: [...input.assets],
+      connections: [...input.connections],
+    });
+    const flag = {
+      ...input,
+      connections: input.connections.map((c) =>
+        c.id === 'l12' ? { ...c, pending: true } : c,
+      ),
+    };
+    const r = store.sync(flag);
+    expect(r.visited).toBe(1);
+    expect(r.connections.changed).toBe(1);
+    expect(r.routing).toBe(false);
+    const moved = {
+      ...flag,
+      connections: flag.connections.map((c) =>
+        c.id === 'l12' ? link('l12', 'a1', 'A', 'a3', '2') : c,
+      ),
+    };
+    const r2 = store.sync(moved);
+    expect(r2.routing).toBe(true);
+    expect(store.edgesById.get('l12')!.b.id).toBe('a3');
+  });
+});

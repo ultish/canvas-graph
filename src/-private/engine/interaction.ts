@@ -18,7 +18,7 @@ import {
   pickPort,
 } from './picking.ts';
 import type { Renderer } from './renderer.ts';
-import type { AssetNode } from './types.ts';
+import type { AssetNode, Edge } from './types.ts';
 
 /**
  * Pointer and keyboard input for a canvas: pan, wheel zoom, click to select, drag from a port (zoomed in) or a
@@ -276,18 +276,68 @@ export class Interaction {
 
   // ------------------------------------------------------------------ per-frame state (called by the renderer before drawing)
 
+  // what the last hover hit-test was done against; if none of it changed, its answer still stands
+  private pick = {
+    mx: NaN,
+    my: NaN,
+    x: NaN,
+    y: NaN,
+    s: NaN,
+    epoch: -1,
+    inside: false,
+    busy: false,
+  };
+
+  /**
+   * The wire under the cursor. This is the costliest hit-test (every wire of every visible card), so it is rate-limited by
+   * what it costs: after a slow one it waits four times as long before the next, and between runs the last answer stands.
+   */
+  private hoverWire(
+    w: { x: number; y: number },
+    s: number,
+    vis: ReadonlySet<AssetNode>,
+  ): Edge | null {
+    const now = performance.now();
+    if (now < this.nextWirePick) return this.engine.anim.hoverEdge;
+    const e = pickEdge(w.x, w.y, s, vis, this.engine.nextPickStamp());
+    this.nextWirePick = now + (performance.now() - now) * 4;
+    return e;
+  }
+  private nextWirePick = 0;
+
   private update(vis: ReadonlySet<AssetNode>): void {
     const eng = this.engine;
     const A = eng.anim;
     const vp = eng.viewport;
     const s = vp.s;
+    const k = this.pick;
+    const moving = eng.isMoving;
+    const same =
+      !moving &&
+      !A.conn &&
+      !A.gconn &&
+      k.mx === this.mouse.x &&
+      k.my === this.mouse.y &&
+      k.x === vp.x &&
+      k.y === vp.y &&
+      k.s === s &&
+      k.epoch === eng.epoch &&
+      k.inside === this.mouse.inside &&
+      !k.busy;
+    k.mx = this.mouse.x;
+    k.my = this.mouse.y;
+    k.x = vp.x;
+    k.y = vp.y;
+    k.s = s;
+    k.epoch = eng.epoch;
+    k.inside = this.mouse.inside;
+    k.busy = moving;
+    if (same) return; // an animation frame, not a pointer move: hover, cursor and highlights are as they were
     const w = vp.toWorld(this.mouse.x, this.mouse.y);
     const idle = !A.conn && !A.gconn && !vp.isDragging && this.mouse.inside;
     A.hover = idle && s >= 0.1 ? eng.grid.pick(w.x, w.y) : null;
     A.hoverEdge =
-      idle && !A.hover && s >= 0.45
-        ? pickEdge(w.x, w.y, s, vis, eng.nextPickStamp())
-        : null;
+      idle && !A.hover && s >= 0.45 ? this.hoverWire(w, s, vis) : null;
     A.hoverGE =
       idle && s < GROUP_SCALE && !A.hoverEdge
         ? pickGroupEdge(w.x, w.y, s, eng.gedges)

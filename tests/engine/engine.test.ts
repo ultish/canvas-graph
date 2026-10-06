@@ -74,13 +74,15 @@ describe('selection', () => {
       (x) => x.a.type === 'switch' && x.b.type === 'process',
     )!;
     e.select({ ge });
+    const before = ge.edges.length;
     e.sync({
       ...input,
       connections: input.connections.filter((c) => c.id !== 'c-sw-p1'),
     });
     expect(e.selGE).not.toBeNull();
     expect(e.payload()).toMatchObject({ kind: 'groupEdge' });
-    expect(e.selGE!.edges.length).toBe(ge.edges.length - 1);
+    expect(e.selGE!.edges.length).toBe(before - 1);
+    expect(e.selGE).toBe(ge); // updated in place: the same pipe object, no remapping needed
   });
 });
 
@@ -424,5 +426,327 @@ describe('animation clock', () => {
     for (let i = 0; i < 40; i++) e.stepAnim();
     expect(n.gl).toBe(0);
     expect(e.anim.glowing.size).toBe(0);
+  });
+});
+
+describe('select events', () => {
+  it('are not repeated when an update did not change what is selected', () => {
+    const input = fan(40);
+    const e = boot(input);
+    const seen: unknown[] = [];
+    e.select({ node: node(e, 'p3') });
+    e.on('select', (p) => void seen.push(p));
+    // a tick on some other asset: the selected asset's payload is identical, so nothing is sent
+    e.sync({
+      ...input,
+      assets: input.assets.map((a) =>
+        a.id === 'p20' ? { ...a, status: 'degraded' } : a,
+      ),
+    });
+    expect(seen).toHaveLength(0);
+    // a tick on the selected asset itself: sent once, with the new data
+    e.sync({
+      ...input,
+      assets: input.assets.map((a) =>
+        a.id === 'p3' ? { ...a, status: 'degraded' } : a,
+      ),
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      kind: 'node',
+      id: 'p3',
+      status: 'degraded',
+    });
+  });
+
+  it('selecting the same thing again, or clearing an empty selection, sends nothing', () => {
+    const e = boot(fan(10));
+    const seen: unknown[] = [];
+    e.select({ node: node(e, 'p1') });
+    e.on('select', (p) => void seen.push(p));
+    e.select({ node: node(e, 'p1') });
+    e.select(null);
+    e.select(null);
+    expect(seen).toEqual([null]);
+  });
+
+  it('a group pipe selection updates when its count changes, and not when another pipe does', () => {
+    const input = fan(30);
+    const e = boot(input);
+    e.select({
+      ge: e.gedges.find(
+        (x) => x.a.type === 'switch' && x.b.type === 'process',
+      )!,
+    });
+    const seen: unknown[] = [];
+    e.on('select', (p) => void seen.push(p));
+    e.sync({
+      ...input,
+      connections: input.connections.filter((c) => c.id !== 'c-agg-s0'),
+    }); // another pipe
+    expect(seen).toHaveLength(0);
+    e.sync({
+      ...input,
+      connections: input.connections.filter(
+        (c) => c.id !== 'c-agg-s0' && c.id !== 'c-sw-p1',
+      ),
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ kind: 'groupEdge' });
+  });
+});
+
+describe('drags survive the model changing under them', () => {
+  const port = (e: GraphEngine, id: string) => ({
+    from: node(e, id),
+    dir: 1 as const,
+    idx: 0,
+    x: 0,
+    y: 0,
+    near: null,
+    target: null,
+    elec: 0,
+    pull: 0,
+    snap: false,
+    pt: null,
+  });
+
+  it('a port drag is cancelled if its asset is removed, and keeps going if an unrelated asset is', () => {
+    const input = fan(20);
+    const e = boot(input);
+    e.anim.conn = port(e, 'p3');
+    e.sync({
+      assets: input.assets.filter((a) => a.id !== 'p9'),
+      connections: input.connections,
+    });
+    expect(e.anim.conn).not.toBeNull();
+    e.sync({
+      assets: input.assets.filter((a) => a.id !== 'p9' && a.id !== 'p3'),
+      connections: input.connections,
+    });
+    expect(e.anim.conn).toBeNull();
+  });
+
+  it('a port drag forgets a target that was removed', () => {
+    const input = fan(20);
+    const e = boot(input);
+    const c = port(e, 'p3');
+    c.target = { node: node(e, 'p4'), idx: 0 } as never;
+    c.near = c.target;
+    e.anim.conn = c;
+    e.sync({
+      assets: input.assets.filter((a) => a.id !== 'p4'),
+      connections: input.connections,
+    });
+    expect(e.anim.conn).toBe(c);
+    expect(c.target).toBeNull();
+    expect(c.near).toBeNull();
+  });
+
+  it('a group drag follows its groups through a relayout, which replaces the group objects', () => {
+    const input = fan(30);
+    const e = boot(input);
+    const from = node(e, 'sw').g!;
+    const target = node(e, 'p4').g!;
+    e.anim.gconn = { from, dir: 1, x: 0, y: 0, target, pull: 0 };
+    e.sync({
+      ...input,
+      assets: [...input.assets, asset('new-sink', 'sink', ['1'], [])],
+    }); // structural: relayout
+    const g = e.anim.gconn;
+    expect(g.from).not.toBe(from);
+    expect(g.from).toBe(node(e, 'sw').g);
+    expect(g.target).toBe(node(e, 'p4').g);
+  });
+
+  it('a group drag is cancelled if its group disappears', () => {
+    const input = fan(30);
+    const e = boot(input);
+    e.anim.gconn = {
+      from: node(e, 'sw').g!,
+      dir: 1,
+      x: 0,
+      y: 0,
+      target: null,
+      pull: 0,
+    };
+    e.sync({
+      assets: input.assets.filter((a) => a.id !== 'sw'),
+      connections: input.connections.filter((c) => !c.id.includes('sw')),
+    });
+    expect(e.anim.gconn).toBeNull();
+  });
+});
+
+describe('animated relayout', () => {
+  const grow = (input: GraphInput): GraphInput => ({
+    ...input,
+    assets: [
+      ...input.assets,
+      ...Array.from({ length: 12 }, (_, i) => asset(`new${i}`, 'process')),
+    ],
+    connections: [
+      ...input.connections,
+      ...Array.from({ length: 12 }, (_, i) =>
+        link(`n${i}`, 'sw', 'A', `new${i}`, '1'),
+      ),
+    ],
+  });
+  const pos = (e: GraphEngine, id: string) =>
+    [node(e, id).x, node(e, id).y] as const;
+
+  it('jumps by default, as before', () => {
+    const input = fan(30);
+    const jump = new GraphEngine();
+    jump.sync(input);
+    const before = pos(jump, 'p3');
+    jump.sync(grow(input));
+    const fresh = new GraphEngine();
+    fresh.sync(grow(input));
+    expect(pos(jump, 'p3')).toEqual(pos(fresh, 'p3'));
+    expect(pos(jump, 'p3')).not.toEqual(before);
+  });
+
+  it('with animateLayout on, existing cards start where they were, glide, and end exactly where a fresh layout puts them', () => {
+    const input = fan(30);
+    const e = new GraphEngine();
+    e.animateLayout = true;
+    e.time = 1;
+    e.sync(input);
+    const start = pos(e, 'p3');
+    const startGroup = node(e, 'p3').g!;
+    const startGeom = [startGroup.x, startGroup.y, startGroup.w, startGroup.h];
+    e.sync(grow(input));
+    expect(pos(e, 'p3')).toEqual(start); // frame zero: nothing has moved yet
+
+    const fresh = new GraphEngine();
+    fresh.sync(grow(input));
+    const end = pos(fresh, 'p3');
+    expect(end).not.toEqual(start);
+
+    e.time = 1.07;
+    expect(e.stepAnim()).toBe(true);
+    const mid = pos(e, 'p3');
+    expect(Math.min(start[0], end[0])).toBeLessThanOrEqual(mid[0]);
+    expect(Math.max(start[0], end[0])).toBeGreaterThanOrEqual(mid[0]);
+    expect(mid).not.toEqual(start);
+    expect(mid).not.toEqual(end);
+
+    e.time = 2;
+    e.stepAnim();
+    expect(pos(e, 'p3')).toEqual(end);
+    for (const n of fresh.store.nodes)
+      expect(pos(e, n.id)).toEqual(pos(fresh, n.id));
+    const g = node(e, 'p3').g!;
+    const fg = node(fresh, 'p3').g!;
+    expect([g.x, g.y, g.w, g.h]).toEqual([fg.x, fg.y, fg.w, fg.h]);
+    expect([g.x, g.y, g.w, g.h]).not.toEqual(startGeom);
+  });
+
+  it('the spatial index follows the glide: a card is found at its destination once it arrives, and nothing stale is left behind', () => {
+    const input = fan(30);
+    const e = new GraphEngine();
+    e.animateLayout = true;
+    e.time = 1;
+    e.sync(input);
+    const oldSpot = pos(e, 'p3');
+    e.sync(grow(input));
+    e.time = 5;
+    e.stepAnim();
+    const n = node(e, 'p3');
+    expect(e.grid.pick(n.x + 5, n.y + 5)).toBe(n);
+    expect(e.grid.pick(oldSpot[0] + 5, oldSpot[1] + 5)).not.toBe(n);
+  });
+
+  it('a relayout that arrives mid-glide starts from where the cards are now', () => {
+    const input = fan(30);
+    const e = new GraphEngine();
+    e.animateLayout = true;
+    e.time = 1;
+    e.sync(input);
+    const bigger = grow(input);
+    e.sync(bigger);
+    e.time = 1.1;
+    e.stepAnim();
+    const midway = pos(e, 'p3');
+    e.sync({
+      ...bigger,
+      assets: [...bigger.assets, asset('another', 'process')],
+      connections: [
+        ...bigger.connections,
+        link('na', 'sw', 'A', 'another', '1'),
+      ],
+    });
+    expect(pos(e, 'p3')).toEqual(midway); // no jump: the new glide begins from the interpolated position
+    e.time = 9;
+    e.stepAnim();
+    const fresh = new GraphEngine();
+    fresh.sync({
+      ...bigger,
+      assets: [...bigger.assets, asset('another', 'process')],
+      connections: [
+        ...bigger.connections,
+        link('na', 'sw', 'A', 'another', '1'),
+      ],
+    });
+    expect(pos(e, 'p3')).toEqual(pos(fresh, 'p3'));
+  });
+
+  it('a card that is removed mid-glide does not break it, and the first layout never animates', () => {
+    const input = fan(30);
+    const e = new GraphEngine();
+    e.animateLayout = true;
+    e.sync(input);
+    expect(e.stepAnim()).toBe(false); // the very first layout has nothing to glide from
+    e.sync(grow(input));
+    e.sync({
+      assets: input.assets.filter((a) => a.id !== 'p3'),
+      connections: input.connections.filter((c) => !c.id.endsWith('-p3')),
+    });
+    e.time = 9;
+    expect(() => e.stepAnim()).not.toThrow();
+  });
+});
+
+describe('highlighting what the host changed', () => {
+  const tick = (input: GraphInput, id: string, status: string): GraphInput => ({
+    ...input,
+    assets: input.assets.map((a) => (a.id === id ? { ...a, status } : a)),
+  });
+
+  it('rings an asset the data changed, then lets it fade', () => {
+    const input = fan(30);
+    const e = boot(input);
+    e.highlightUpdates = true;
+    e.time = 4;
+    e.sync(tick(input, 'p5', 'degraded'));
+    expect([...e.anim.pulsing].map((n) => n.id)).toEqual(['p5']);
+    e.time = 4.5;
+    expect(e.stepAnim()).toBe(true);
+    expect(e.anim.pulsing.size).toBe(1);
+    e.time = 5;
+    e.stepAnim();
+    expect(e.anim.pulsing.size).toBe(0);
+    expect(node(e, 'p5').pulse).toBeUndefined();
+  });
+
+  it('is off unless asked, and ignores new assets, connections, and bulk changes', () => {
+    const input = fan(600);
+    const off = boot(input);
+    off.sync(tick(input, 'p5', 'degraded'));
+    expect(off.anim.pulsing.size).toBe(0);
+
+    const on = boot(input);
+    on.highlightUpdates = true;
+    on.sync({ ...input, assets: [...input.assets, asset('fresh', 'process')] });
+    expect(on.anim.pulsing.size).toBe(0); // arriving is not changing
+    const bulk = {
+      ...input,
+      assets: input.assets.map((a, i) =>
+        i % 2 ? { ...a, status: 'degraded' } : a,
+      ),
+    };
+    on.sync(bulk);
+    expect(on.anim.pulsing.size).toBe(0); // 300 changes at once would only be noise
   });
 });

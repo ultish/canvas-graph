@@ -8,6 +8,8 @@ import type {
   EngineEvents,
 } from '../-private/engine/engine.ts';
 import { Interaction } from '../-private/engine/interaction.ts';
+import { LatestWins } from '../-private/engine/latest-wins.ts';
+import { effectivePixelRatio } from '../-private/engine/pixel-ratio.ts';
 import type { SelectionPayload } from '../-private/engine/payloads.ts';
 import { Renderer, type FrameStats } from '../-private/engine/renderer.ts';
 import type { SyncResult } from '../-private/engine/store.ts';
@@ -21,6 +23,26 @@ export interface GraphCanvasNamed {
   colors?: Record<string, string>;
   /** Highlight the whole upstream/downstream path of a selected asset. */
   fullPath?: boolean;
+  /**
+   * The densest pixel ratio the canvas will draw at (default 1.5). A 2x or 3x screen means 4-9x the pixels to fill, which
+   * is what hurts a client with no GPU. Pass a higher number, or Infinity, to draw at the screen's full density.
+   */
+  maxPixelRatio?: number;
+  /**
+   * Draw at most this many frames a second (default 60, uncapped). 30 halves the drawing work on a weak client, at the
+   * cost of choppier animation.
+   */
+  maxFps?: number;
+  /**
+   * Apply at most one data payload per this many ms (the newest; the ones in between are skipped, which is safe because each
+   * is the whole truth). A number, or 'auto' (100 ms above 5,000 assets, none below). Default: off. For a very busy feed on
+   * a big graph.
+   */
+  syncThrottle?: number | 'auto';
+  /** Ring the assets your data changes, briefly (default true): a live feed's updates become visible. */
+  highlightUpdates?: boolean;
+  /** Glide cards to their new positions when the layout changes (default true). Off: they jump. */
+  animateLayout?: boolean;
   onReady?: (handle: GraphHandle) => void;
   onSelect?: (selection: SelectionPayload | null) => void;
   onChange?: (change: ChangeEvent) => void;
@@ -49,6 +71,8 @@ export default class GraphCanvasModifier extends Modifier<Signature> {
   private args: GraphCanvasNamed = {};
   private lastData: GraphInput | null | undefined;
   private lastFull: boolean | undefined;
+  private lastRatio: number | undefined;
+  private refit: (() => void) | undefined;
   private inModify = false;
   private bound = new Map<string, { off: () => void; passive: boolean }>();
 
@@ -58,6 +82,11 @@ export default class GraphCanvasModifier extends Modifier<Signature> {
       data: named.data,
       colors: named.colors,
       fullPath: named.fullPath,
+      maxPixelRatio: named.maxPixelRatio,
+      animateLayout: named.animateLayout,
+      maxFps: named.maxFps,
+      highlightUpdates: named.highlightUpdates,
+      syncThrottle: named.syncThrottle,
       onReady: named.onReady,
       onSelect: named.onSelect,
       onChange: named.onChange,
@@ -97,9 +126,10 @@ export default class GraphCanvasModifier extends Modifier<Signature> {
       renderer.resize(
         Math.max(1, r.width),
         Math.max(1, r.height),
-        window.devicePixelRatio || 1,
+        effectivePixelRatio(window.devicePixelRatio, this.args.maxPixelRatio),
       );
     };
+    this.refit = fit;
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(element);
@@ -121,6 +151,7 @@ export default class GraphCanvasModifier extends Modifier<Signature> {
     registerDestructor(this, () => {
       ro.disconnect();
       mo.disconnect();
+      this.syncer.destroy();
       scheme.removeEventListener('change', retheme);
       interaction.destroy();
       renderer.destroy();
@@ -148,18 +179,39 @@ export default class GraphCanvasModifier extends Modifier<Signature> {
     this.bind('layout', a.onLayout, true);
     this.bind('connectRequest', a.onConnectRequest, false); // a real host handler: its Promise decides the outcome
     this.bind('disconnectRequest', a.onDisconnectRequest, false);
+    engine.animateLayout = a.animateLayout !== false;
+    engine.highlightUpdates = a.highlightUpdates !== false;
+    this.renderer!.maxFps = a.maxFps ?? 60;
+    if (a.maxPixelRatio !== this.lastRatio) {
+      this.lastRatio = a.maxPixelRatio;
+      this.refit?.();
+    }
     if (a.fullPath !== undefined && a.fullPath !== this.lastFull) {
       this.lastFull = a.fullPath;
       engine.setFullPath(a.fullPath);
     }
     if (a.data && a.data !== this.lastData) {
-      const first =
-        this.lastData === undefined || engine.store.nodes.length === 0;
       this.lastData = a.data;
-      engine.sync(a.data);
-      if (first) engine.fitAll(true);
+      this.syncer.push(a.data);
     }
   }
+
+  /** The newest payload wins; with `@syncThrottle` set, at most one is applied per window. */
+  private syncer = new LatestWins<GraphInput>(
+    (data) => {
+      const engine = this.engine!;
+      const first = engine.store.nodes.length === 0;
+      engine.sync(data);
+      if (first) engine.fitAll(true);
+    },
+    () => {
+      const t = this.args.syncThrottle;
+      if (typeof t === 'number') return t;
+      return t === 'auto' && (this.engine?.store.nodes.length ?? 0) > 5000
+        ? 100
+        : 0;
+    },
+  );
 
   /** (Re)register a host callback only while it exists, so "no handler" really means no handler. */
   private bind<K extends keyof EngineEvents>(

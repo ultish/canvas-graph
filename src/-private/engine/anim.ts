@@ -46,6 +46,8 @@ export interface AnimState {
   } | null;
   ghost: { segs: Cubic[]; type: string; t0: number } | null;
   bumping: Set<AssetNode>;
+  /** Assets the host's data just changed: they wear a fading ring for a moment. */
+  pulsing: Set<AssetNode>;
   glowing: Set<AssetNode>;
   pulseUntil: number;
   hover: AssetNode | null;
@@ -60,6 +62,7 @@ export const createAnimState = (): AnimState => ({
   flash: null,
   ghost: null,
   bumping: new Set(),
+  pulsing: new Set(),
   glowing: new Set(),
   pulseUntil: 0,
   hover: null,

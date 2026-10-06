@@ -1,6 +1,6 @@
 import { createAnimState } from './anim.ts';
 import { Emitter } from './emitter.ts';
-import { layoutGraph, routeEdges } from './layout.ts';
+import { GroupRouter, layoutGraph } from './layout.ts';
 import {
   describeEdge,
   describeGroup,
@@ -12,6 +12,7 @@ import {
 } from './payloads.ts';
 import { edgeSegs } from './routes.ts';
 import { SpatialGrid } from './spatial.ts';
+import { deepEqual } from './util.ts';
 import { GraphStore, type SyncResult } from './store.ts';
 import type {
   AssetNode,
@@ -136,10 +137,16 @@ export class GraphEngine {
 
   groups: Group[] = [];
   comps: Comp[] = [];
-  gedges: GroupEdge[] = [];
+  private router = new GroupRouter();
+  /** The group-to-group pipes. One array, updated in place. */
+  get gedges(): GroupEdge[] {
+    return this.router.gedges;
+  }
   /** Seconds. The renderer sets this at the start of every frame; animations are timed against it. */
   time = 0;
   fullPath = false;
+  /** Ring the assets the host's data changes (a live feed's updates become visible). Off here, on in the component. */
+  highlightUpdates = false;
 
   selected: AssetNode | null = null;
   selEdge: Edge | null = null;
@@ -151,6 +158,15 @@ export class GraphEngine {
   readonly pending = new Set<Edge>();
   readonly deleting = new Set<Edge>();
 
+  /** Glide cards and group frames to their new positions after a relayout, instead of jumping. */
+  animateLayout = false;
+  layoutTweenMs = 280;
+  private tweenNodes: AssetNode[] = [];
+  private tweenData = new Float64Array(0); // per node: fromX, fromY, toX, toY
+  private tweenGroups: Group[] = [];
+  private tweenGData = new Float64Array(0); // per group: from x,y,w,h then to x,y,w,h
+  private tweenStart = 0;
+
   private undoStack: UndoEntry[] = [];
   private laidOut = false;
   private stamp = 0;
@@ -161,7 +177,11 @@ export class GraphEngine {
     return ++this.stamp;
   }
 
+  /** Bumped whenever the model, the layout or the selection changes: cached hit-test results are stale after it. */
+  epoch = 0;
+
   invalidate(): void {
+    this.epoch++;
     this.emitter.emit('invalidate', undefined);
   }
 
@@ -206,7 +226,8 @@ export class GraphEngine {
   sync(input: GraphInput): SyncResult {
     const res = this.store.sync(input);
     if (!this.laidOut || res.structural) this.relayout('sync');
-    else if (res.routing) this.reroute();
+    else if (res.routing)
+      this.reroute({ added: res.addedEdges, removed: res.removedEdges });
     for (const [localId, realId] of res.promoted) {
       for (const e of this.pending)
         if (e.id === localId) this.pending.delete(e);
@@ -214,6 +235,17 @@ export class GraphEngine {
       if (real) {
         real.ct = this.time;
         this.anim.pulseUntil = Math.max(this.anim.pulseUntil, this.time + 0.5);
+      }
+    }
+    if (
+      this.highlightUpdates &&
+      res.changedAssets.length &&
+      res.changedAssets.length <= 200
+    ) {
+      // a bulk change would only be noise; individual updates are what a live feed is for
+      for (const n of res.changedAssets) {
+        n.pulse = this.time;
+        this.anim.pulsing.add(n);
       }
     }
     for (const id of res.settled) {
@@ -234,26 +266,131 @@ export class GraphEngine {
     return res;
   }
 
+  /**
+   * Recompute layers, groups and positions. With `animateLayout` on, cards and group frames glide from where they were to
+   * where they now belong (a new asset arriving does not make everything teleport); otherwise they jump.
+   */
   relayout(reason = 'manual'): void {
+    const animate = this.animateLayout && this.laidOut;
+    this.stopTween(false);
+    let before: AssetNode[] = [];
+    let fromPos: Float64Array | null = null;
+    if (animate) {
+      before = this.store.nodes.filter((n) => n.g !== null);
+      fromPos = new Float64Array(before.length * 2);
+      before.forEach((n, i) => {
+        fromPos![2 * i] = n.x;
+        fromPos![2 * i + 1] = n.y;
+        n.og = n.g;
+      });
+    }
+    const oldGeom = animate
+      ? new Map(this.groups.map((g) => [g, [g.x, g.y, g.w, g.h] as const]))
+      : null;
     const r = layoutGraph(this.store.nodes, this.store.edgeList);
     this.groups = r.groups;
     this.comps = r.comps;
-    this.gedges = routeEdges(this.store.edgeList, this.groups, this.comps);
-    this.grid.rebuild(this.store.nodes);
+    this.router.rebuild(this.store.edgeList, this.comps);
+    this.grid.rebuild(this.store.nodes); // at the final positions
     for (const n of this.store.nodes) {
       n.x0 = undefined;
       n.bt = null;
     }
     this.anim.bumping.clear();
+    if (animate && fromPos && oldGeom)
+      this.startTween(before, fromPos, oldGeom);
     this.laidOut = true;
     this.remapSelection();
     this.emitter.emit('layout', { reason });
     this.invalidate();
   }
 
+  /** Put every moving card back at its start and queue the glide to its final position. */
+  private startTween(
+    before: AssetNode[],
+    fromPos: Float64Array,
+    oldGeom: Map<Group, readonly [number, number, number, number]>,
+  ): void {
+    // group frames first: they find their old geometry through the members' remembered old group
+    const groups: Group[] = [];
+    const gdata: number[] = [];
+    for (const g of this.groups) {
+      let old: readonly [number, number, number, number] | undefined;
+      for (let i = 0; i < g.nodes.length && i < 8 && !old; i++) {
+        const og = g.nodes[i]!.og;
+        if (og) old = oldGeom.get(og);
+      }
+      if (!old) continue;
+      if (
+        Math.abs(old[0] - g.x) +
+          Math.abs(old[1] - g.y) +
+          Math.abs(old[2] - g.w) +
+          Math.abs(old[3] - g.h) <
+        0.5
+      )
+        continue;
+      groups.push(g);
+      gdata.push(old[0], old[1], old[2], old[3], g.x, g.y, g.w, g.h);
+    }
+    const nodes: AssetNode[] = [];
+    const data: number[] = [];
+    before.forEach((n, i) => {
+      n.og = null;
+      if (this.store.assets.get(n.id) !== n) return; // removed since
+      const fx = fromPos[2 * i]!;
+      const fy = fromPos[2 * i + 1]!;
+      if (Math.abs(fx - n.x) + Math.abs(fy - n.y) < 0.5) return;
+      nodes.push(n);
+      data.push(fx, fy, n.x, n.y);
+    });
+    if (!nodes.length && !groups.length) return;
+    this.tweenNodes = nodes;
+    this.tweenData = Float64Array.from(data);
+    this.tweenGroups = groups;
+    this.tweenGData = Float64Array.from(gdata);
+    this.tweenStart = this.time;
+    // the grid has the final positions; add the starting ones too, so a card gliding into view is not culled
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i]!;
+      n.x = this.tweenData[4 * i]!;
+      n.y = this.tweenData[4 * i + 1]!;
+      this.grid.add(n);
+    }
+    groups.forEach((g, i) => {
+      g.x = this.tweenGData[8 * i]!;
+      g.y = this.tweenGData[8 * i + 1]!;
+      g.w = this.tweenGData[8 * i + 2]!;
+      g.h = this.tweenGData[8 * i + 3]!;
+    });
+  }
+
+  /** Finish (or abandon) a glide: cards stay wherever they are unless `snap` puts them at their destination. */
+  private stopTween(snap: boolean): void {
+    if (!this.tweenNodes.length && !this.tweenGroups.length) return;
+    if (snap) {
+      this.tweenNodes.forEach((n, i) => {
+        n.x = this.tweenData[4 * i + 2]!;
+        n.y = this.tweenData[4 * i + 3]!;
+      });
+      this.tweenGroups.forEach((g, i) => {
+        g.x = this.tweenGData[8 * i + 4]!;
+        g.y = this.tweenGData[8 * i + 5]!;
+        g.w = this.tweenGData[8 * i + 6]!;
+        g.h = this.tweenGData[8 * i + 7]!;
+      });
+      this.grid.rebuild(this.store.nodes);
+    }
+    this.tweenNodes = [];
+    this.tweenGroups = [];
+  }
+
   /** Connections changed but assets did not move: rebuild group pipes and lanes only. */
-  reroute(): void {
-    this.gedges = routeEdges(this.store.edgeList, this.groups, this.comps);
+  reroute(delta?: { added: readonly Edge[]; removed: readonly Edge[] }): void {
+    if (delta) {
+      // update the pipes in place: a connection joining two groups that already have a pipe just changes its count
+      this.router.remove(delta.removed);
+      this.router.add(delta.added);
+    } else this.router.rebuild(this.store.edgeList, this.comps);
     this.remapSelection();
     this.invalidate();
   }
@@ -284,8 +421,14 @@ export class GraphEngine {
     return null;
   }
 
+  /** The payload last sent to listeners; an update that would send the same data again is dropped. */
+  private lastPayload: SelectionPayload | null = null;
+
   private emitSelect(): void {
-    this.emitter.emit('select', this.payload());
+    const p = this.payload();
+    if (deepEqual(p, this.lastPayload)) return; // a tick that did not touch what is selected must not re-render your inspector
+    this.lastPayload = p;
+    this.emitter.emit('select', p);
   }
 
   /** Highlight sets for the selected asset: direct neighbours, or the full upstream/downstream path. */
@@ -342,7 +485,39 @@ export class GraphEngine {
     this.anim.hoverGE = geOf(this.anim.hoverGE);
     if (this.anim.hover && !alive(this.anim.hover)) this.anim.hover = null;
     this.anim.hoverEdge = null;
+    this.remapDrags(alive, gOf);
     this.computeSel();
+  }
+
+  /** A sync or relayout can remove assets and replace group objects under a drag in progress: repoint it, or cancel it. */
+  private remapDrags(
+    alive: (n: AssetNode) => boolean,
+    gOf: (g: Group | null) => Group | null,
+  ): void {
+    const A = this.anim;
+    const c = A.conn;
+    if (c) {
+      const ports = c.dir > 0 ? c.from.outs : c.from.ins;
+      if (!alive(c.from) || !ports[c.idx])
+        A.conn = null; // the asset (or the port it was dragged from) is gone
+      else {
+        if (c.near && !alive(c.near.node)) c.near = null;
+        if (c.target && !alive(c.target.node)) c.target = null;
+      }
+    }
+    const r = A.retract;
+    if (r && !alive(r.from)) A.retract = null;
+    const g = A.gconn;
+    if (g) {
+      const from = gOf(g.from);
+      if (!from) A.gconn = null;
+      else {
+        g.from = from;
+        g.target = g.target ? gOf(g.target) : null;
+      }
+    }
+    if (A.flash && this.store.edgesById.get(A.flash.e.id) !== A.flash.e)
+      A.flash = null;
   }
 
   // ---------------------------------------------------------------- connect
@@ -361,7 +536,7 @@ export class GraphEngine {
     const e = this.store.addLocalEdge(a, fp, b, tp, { pending: true });
     if (!e) return null;
     this.pending.add(e);
-    this.reroute();
+    this.reroute({ added: [e], removed: [] });
     if (record) this.undoStack.push({ kind: 'connected', ends: [endsOf(e)] });
     this.anim.flash = { e, t0: this.time, node: b, dir: 1, idx: bi };
     this.bump(b, -1, 7);
@@ -479,7 +654,7 @@ export class GraphEngine {
     if (!made.length) return { created: [], skipped };
     if (opts.pending) for (const e of made) this.pending.add(e);
     if (overflow) this.relayout('ports');
-    else this.reroute();
+    else this.reroute({ added: made, removed: [] });
     this.undoStack.push({ kind: 'connected', ends: made.map(endsOf) });
     this.emitter.emit('change', {
       reason: 'add',
@@ -577,7 +752,7 @@ export class GraphEngine {
       this.deleting.delete(e);
     }
     this.store.removeEdges(list);
-    this.reroute();
+    this.reroute({ added: [], removed: list });
     this.emitter.emit('change', {
       reason,
       added: [],
@@ -651,7 +826,7 @@ export class GraphEngine {
     }
     if (!made.length) return true;
     for (const e of made) this.pending.add(e);
-    this.reroute();
+    this.reroute({ added: made, removed: [] });
     this.emitter.emit('change', {
       reason: 'connect',
       added: made.map((e) => e.id),
@@ -704,6 +879,11 @@ export class GraphEngine {
   }
 
   /** Advance time-based state (card shoves, glow easing). Returns true while anything still needs frames. */
+  /** Are cards currently gliding? (Hit-test results can't be reused while they move.) */
+  get isMoving(): boolean {
+    return this.tweenNodes.length > 0 || this.anim.bumping.size > 0;
+  }
+
   stepAnim(): boolean {
     let busy = false;
     const A = this.anim;
@@ -717,6 +897,35 @@ export class GraphEngine {
         n.x = n.x0 + n.bpush * (age / 0.13) * Math.exp(1 - age / 0.13);
         busy = true;
       }
+    }
+    for (const n of A.pulsing) {
+      if (n.pulse === undefined || this.time - n.pulse > 0.9) {
+        n.pulse = undefined;
+        A.pulsing.delete(n);
+      } else busy = true;
+    }
+    if (this.tweenNodes.length || this.tweenGroups.length) {
+      const t = Math.min(
+        1,
+        (this.time - this.tweenStart) / (this.layoutTweenMs / 1000),
+      );
+      const k = 1 - Math.pow(1 - t, 3); // ease out
+      const d = this.tweenData;
+      for (let i = 0; i < this.tweenNodes.length; i++) {
+        const n = this.tweenNodes[i]!;
+        n.x = d[4 * i]! + (d[4 * i + 2]! - d[4 * i]!) * k;
+        n.y = d[4 * i + 1]! + (d[4 * i + 3]! - d[4 * i + 1]!) * k;
+      }
+      const g = this.tweenGData;
+      for (let i = 0; i < this.tweenGroups.length; i++) {
+        const gr = this.tweenGroups[i]!;
+        gr.x = g[8 * i]! + (g[8 * i + 4]! - g[8 * i]!) * k;
+        gr.y = g[8 * i + 1]! + (g[8 * i + 5]! - g[8 * i + 1]!) * k;
+        gr.w = g[8 * i + 2]! + (g[8 * i + 6]! - g[8 * i + 2]!) * k;
+        gr.h = g[8 * i + 3]! + (g[8 * i + 7]! - g[8 * i + 3]!) * k;
+      }
+      if (t >= 1) this.stopTween(true);
+      busy = true;
     }
     if (A.hover) A.glowing.add(A.hover);
     if (this.selected) A.glowing.add(this.selected);

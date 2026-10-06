@@ -1,6 +1,6 @@
 import { portY, PAD } from './layout.ts';
 import { edgeSegs, groupEdgeSegs, pipePx } from './routes.ts';
-import { sampleSegs, segDist } from './geometry.ts';
+import { distToCubic, sampleSegs, segDist } from './geometry.ts';
 import type { AssetNode, Edge, Group, GroupEdge } from './types.ts';
 
 /** The wire nearest the cursor, within 9px, among wires touching the given (visible) cards. */
@@ -37,7 +37,29 @@ export function pickEdge(
           y > hi + tol
         )
           continue;
-        const pts = sampleSegs(edgeSegs(e), 32);
+        if (ly === undefined) {
+          // a plain port-to-port curve: measure without allocating
+          const d = Math.max(60, Math.abs(x1 - x0) * 0.5);
+          const dist = distToCubic(
+            x,
+            y,
+            x0,
+            y0,
+            x0 + d,
+            y0,
+            x1 - d,
+            y1,
+            x1,
+            y1,
+            bd,
+          );
+          if (dist < bd) {
+            bd = dist;
+            best = e;
+          }
+          continue;
+        }
+        const pts = sampleSegs(edgeSegs(e), 32); // loops and skips: rare, an odd shape
         for (let i = 1; i < pts.length; i++) {
           const d = segDist(x, y, pts[i - 1]!, pts[i]!);
           if (d < bd) {

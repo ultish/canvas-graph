@@ -2,12 +2,12 @@ import { ringR, smooth } from './constants.ts';
 import type { GraphEngine } from './engine.ts';
 import { PAD, portY } from './layout.ts';
 import { Palette } from './palette.ts';
+import { DEFAULT_MAX_FPS, tooSoon } from './frame-rate.ts';
 import { DARK, resolveTheme, type Theme } from './theme.ts';
 import { edgeSegs, groupEdgeSegs, pipePx } from './routes.ts';
 import type { AssetNode, Cubic, Edge } from './types.ts';
 
 const FONT = '-apple-system,system-ui,sans-serif';
-const EMPTY: ReadonlySet<AssetNode> = new Set();
 
 export interface FrameStats {
   mode: 'FAR' | 'MID' | 'NEAR';
@@ -26,6 +26,8 @@ export interface RendererOptions {
   /** Overrides the theme's background colour. */
   background?: string;
   onFrame?: (stats: FrameStats) => void;
+  /** Draw at most this many frames a second (default 60 = uncapped). 30 halves the work on a weak client. */
+  maxFps?: number;
 }
 
 function strokeSegs(ctx: CanvasRenderingContext2D, sg: readonly Cubic[]): void {
@@ -41,9 +43,10 @@ function strokeSegs(ctx: CanvasRenderingContext2D, sg: readonly Cubic[]): void {
  */
 export class Renderer {
   readonly palette: Palette;
+  private readonly visible = new Set<AssetNode>();
   /** Called after the camera and animations have advanced, before drawing, with the visible assets. */
   beforeDraw: ((visible: ReadonlySet<AssetNode>) => void) | null = null;
-  lastVisible: ReadonlySet<AssetNode> = EMPTY;
+  lastVisible: ReadonlySet<AssetNode> = this.visible;
   stats: FrameStats | null = null;
 
   private readonly ctx: CanvasRenderingContext2D;
@@ -54,6 +57,19 @@ export class Renderer {
   private wires = 0;
   private off: () => void;
   private theme: Theme = DARK;
+  maxFps = DEFAULT_MAX_FPS;
+  private lastDrawn = -Infinity;
+  // reused every frame, so drawing allocates as little as possible
+  private readonly glow: Edge[] = [];
+  private readonly glowByType = new Map<string, Edge[]>();
+  private readonly wireBuckets: [Map<string, Edge[]>, Map<string, Edge[]>] = [
+    new Map<string, Edge[]>(),
+    new Map<string, Edge[]>(),
+  ];
+  private readonly buckets = new Map<
+    string,
+    { on: AssetNode[]; off: AssetNode[] }
+  >();
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -65,6 +81,7 @@ export class Renderer {
     this.ctx = ctx;
     this.palette = new Palette(opts.colors);
     this.refreshTheme();
+    this.maxFps = opts.maxFps ?? DEFAULT_MAX_FPS;
     this.off = engine.on('invalidate', () => this.invalidate(), {
       passive: true,
     });
@@ -121,6 +138,10 @@ export class Renderer {
 
   private frame = (t: number): void => {
     this.raf = 0;
+    if (tooSoon(t, this.lastDrawn, this.maxFps)) {
+      this.request(); // the work is still pending: try again on the next display tick
+      return;
+    }
     const eng = this.engine;
     eng.time = t / 1000;
     const vp = eng.viewport;
@@ -128,6 +149,28 @@ export class Renderer {
     const busy = eng.stepAnim();
     if (!this.dirty && !moving && !busy) return;
     this.dirty = false;
+    this.lastDrawn = t;
+    this.paint();
+    if (moving || busy) this.request();
+  };
+
+  /**
+   * Advance the camera and animations to `t` (ms) and draw one frame right now, ignoring the frame cap and the
+   * display's schedule. For benchmarks and tests; the normal path is `invalidate()`.
+   */
+  renderOnce(t = performance.now()): FrameStats {
+    const eng = this.engine;
+    eng.time = t / 1000;
+    eng.viewport.step();
+    eng.stepAnim();
+    this.dirty = false;
+    this.lastDrawn = t;
+    return this.paint();
+  }
+
+  private paint(): FrameStats {
+    const eng = this.engine;
+    const vp = eng.viewport;
     const t0 = performance.now();
     const ctx = this.ctx;
     const s = vp.s;
@@ -140,7 +183,10 @@ export class Renderer {
     const nearA = smooth(0.4, 0.6, s);
     const midA = smooth(0.07, 0.12, s) * (1 - nearA);
     const b = vp.bounds();
-    const vis = s >= 0.07 ? eng.grid.query(b.x0, b.y0, b.x1, b.y1) : EMPTY;
+    const vis: ReadonlySet<AssetNode> =
+      s >= 0.07
+        ? eng.grid.query(b.x0, b.y0, b.x1, b.y1, this.visible)
+        : (this.visible.clear(), this.visible);
     this.lastVisible = vis;
     this.beforeDraw?.(vis);
 
@@ -153,6 +199,7 @@ export class Renderer {
       this.drawNear(vis, nearA);
       this.drawTransients();
     }
+    if (eng.anim.pulsing.size) this.drawPulses(vis, Math.max(midA, nearA));
     this.stats = {
       mode: nearA > 0.5 ? 'NEAR' : s >= 0.07 ? 'MID' : 'FAR',
       scale: s,
@@ -164,8 +211,8 @@ export class Renderer {
       groups: eng.groups.length,
     };
     this.opts.onFrame?.(this.stats);
-    if (moving || busy) this.request();
-  };
+    return this.stats;
+  }
 
   // ------------------------------------------------------------------ far: group blocks and fat pipes
 
@@ -363,10 +410,46 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
+  /** A connection's path, without allocating in the common case (a plain port-to-port curve). */
+  private strokeEdge(e: Edge): void {
+    if (e.ge?.laneY === undefined) {
+      const x0 = e.a.x + e.a.w;
+      const y0 = portY(e.a, e.ai);
+      const x1 = e.b.x;
+      const y1 = portY(e.b, e.bi);
+      this.curve(x0, y0, x1, y1);
+    } else strokeSegs(this.ctx, edgeSegs(e)); // loops and skips: rare, and a more complex shape
+  }
+
   private curve(x0: number, y0: number, x1: number, y1: number): void {
     const d = Math.max(60, Math.abs(x1 - x0) * 0.5);
     this.ctx.moveTo(x0, y0);
     this.ctx.bezierCurveTo(x0 + d, y0, x1 - d, y1, x1, y1);
+  }
+
+  /** A ring that opens out and fades around each asset the host's data just changed. Visible at mid and near zoom. */
+  private drawPulses(vis: ReadonlySet<AssetNode>, alpha: number): void {
+    const { ctx, engine: eng } = this;
+    const s = eng.viewport.s;
+    ctx.strokeStyle = this.theme.highlight;
+    for (const n of eng.anim.pulsing) {
+      if (!vis.has(n) || n.pulse === undefined) continue;
+      const k = 1 - (eng.time - n.pulse) / 0.9;
+      if (k <= 0) continue;
+      const grow = (1 - k) * 16 + 3;
+      ctx.globalAlpha = alpha * k * 0.9;
+      ctx.lineWidth = Math.max(2 / s, 3);
+      ctx.beginPath();
+      ctx.roundRect(
+        n.x - grow,
+        n.y - grow,
+        n.w + 2 * grow,
+        n.h + 2 * grow,
+        14 + grow,
+      );
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
   }
 
   // ------------------------------------------------------------------ mid: member tiles
@@ -375,23 +458,30 @@ export class Renderer {
     if (vis.size > 6000) return;
     const { ctx, engine: eng } = this;
     const dim = eng.selNodes.size > 0;
-    const buckets = new Map<string, AssetNode[]>();
-    for (const n of vis) {
-      const on = !dim || eng.selNodes.has(n);
-      const k =
-        (n.status === 'degraded' ? this.theme.bad : this.c(n.type)) +
-        (on ? '' : '|d');
-      let arr = buckets.get(k);
-      if (!arr) buckets.set(k, (arr = []));
-      arr.push(n);
+    const buckets = this.buckets;
+    for (const bk of buckets.values()) {
+      bk.on.length = 0;
+      bk.off.length = 0;
     }
-    for (const [k, arr] of buckets) {
-      const [c, d] = k.split('|') as [string, string | undefined];
-      ctx.globalAlpha = alpha * (d ? 0.2 : 1);
-      ctx.fillStyle = c;
-      ctx.beginPath();
-      for (const n of arr) ctx.rect(n.x, n.y, n.w, n.h);
-      ctx.fill();
+    for (const n of vis) {
+      const key = n.status === 'degraded' ? '\0degraded' : n.type; // no string building per asset
+      let bk = buckets.get(key);
+      if (!bk) buckets.set(key, (bk = { on: [], off: [] }));
+      (!dim || eng.selNodes.has(n) ? bk.on : bk.off).push(n);
+    }
+    for (const [key, bk] of buckets) {
+      const color = key === '\0degraded' ? this.theme.bad : this.c(key);
+      for (const [list, a] of [
+        [bk.on, alpha],
+        [bk.off, alpha * 0.2],
+      ] as const) {
+        if (!list.length) continue;
+        ctx.globalAlpha = a;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        for (const n of list) ctx.rect(n.x, n.y, n.w, n.h);
+        ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -417,7 +507,7 @@ export class Renderer {
         )
           continue;
         if (pass === 0 && ++n > 4000) break;
-        strokeSegs(ctx, edgeSegs(e));
+        this.strokeEdge(e);
       }
       ctx.globalAlpha = alpha * (pass ? 0.95 : 0.25);
       ctx.strokeStyle = this.theme.highlight;
@@ -446,7 +536,8 @@ export class Renderer {
       n.hoP.length = n.outs.length;
       n.hoP.fill(0);
     }
-    const glowEdges: Edge[] = [];
+    const glowEdges = this.glow;
+    glowEdges.length = 0;
     for (const n of vis) {
       for (let pass = 0; pass < 2; pass++) {
         for (const e of pass ? n.in : n.out) {
@@ -468,27 +559,36 @@ export class Renderer {
           }
           if (!picked && drawn++ > 1500) continue;
           const on = !dim || picked;
-          const fade = e.deleting
-            ? 0.35 + 0.1 * Math.sin(time * 4)
-            : e.pending
-              ? 0.6 + 0.22 * Math.sin(time * 5)
-              : 1;
-          ctx.globalAlpha = alpha * (on ? 1 : 0.08) * fade;
-          ctx.strokeStyle = e.deleting ? this.theme.bad : this.c(A.type);
-          ctx.lineWidth = lw;
-          ctx.setLineDash(e.enabled ? [] : [14, 10]);
-          ctx.beginPath();
-          strokeSegs(ctx, edgeSegs(e));
-          ctx.stroke();
-          if (e.ct !== undefined) {
-            const k = (time - e.ct) / 0.5;
-            if (k >= 1) e.ct = undefined;
-            else {
-              ctx.globalAlpha = alpha * 0.4 * (1 - k);
-              ctx.lineWidth = lw * 5;
-              ctx.stroke();
-              ctx.lineWidth = lw;
+          if (e.deleting || e.pending || !e.enabled || e.ct !== undefined) {
+            // the unusual ones carry their own look: draw them one at a time
+            const fade = e.deleting
+              ? 0.35 + 0.1 * Math.sin(time * 4)
+              : e.pending
+                ? 0.6 + 0.22 * Math.sin(time * 5)
+                : 1;
+            ctx.globalAlpha = alpha * (on ? 1 : 0.08) * fade;
+            ctx.strokeStyle = e.deleting ? this.theme.bad : this.c(A.type);
+            ctx.lineWidth = lw;
+            ctx.setLineDash(e.enabled ? [] : [14, 10]);
+            ctx.beginPath();
+            this.strokeEdge(e);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            if (e.ct !== undefined) {
+              const k = (time - e.ct) / 0.5;
+              if (k >= 1) e.ct = undefined;
+              else {
+                ctx.globalAlpha = alpha * 0.4 * (1 - k);
+                ctx.lineWidth = lw * 5;
+                ctx.stroke();
+              }
             }
+          } else {
+            // the ordinary ones are collected by colour and stroked together: one path, one stroke call
+            let bucket = this.wireBuckets[on ? 0 : 1].get(A.type);
+            if (!bucket)
+              this.wireBuckets[on ? 0 : 1].set(A.type, (bucket = []));
+            bucket.push(e);
           }
           if (dim && on && glowEdges.length < 500) glowEdges.push(e);
         }
@@ -496,19 +596,45 @@ export class Renderer {
     }
     this.wires = drawn;
     ctx.setLineDash([]);
-    for (const e of glowEdges) {
-      // selected path: wide glow + flowing dashes
-      ctx.beginPath();
-      strokeSegs(ctx, edgeSegs(e));
+    ctx.lineWidth = lw;
+    for (const on of [0, 1]) {
+      // dimmed ones first, so the highlighted path is above them
+      const buckets = this.wireBuckets[1 - on]!;
+      for (const [type, list] of buckets) {
+        if (!list.length) continue;
+        ctx.globalAlpha = alpha * (on ? 1 : 0.08);
+        ctx.strokeStyle = this.c(type);
+        ctx.beginPath();
+        for (const e of list) this.strokeEdge(e);
+        ctx.stroke();
+        list.length = 0;
+      }
+    }
+    if (glowEdges.length) {
+      // the selected path: a wide glow (one stroke per colour), then flowing dashes (one stroke in all)
+      const byType = this.glowByType;
+      for (const l of byType.values()) l.length = 0;
+      for (const e of glowEdges) {
+        let l = byType.get(e.a.type);
+        if (!l) byType.set(e.a.type, (l = []));
+        l.push(e);
+      }
       ctx.globalAlpha = alpha * 0.18;
-      ctx.strokeStyle = this.c(e.a.type);
       ctx.lineWidth = lw * 4;
-      ctx.stroke();
+      for (const [type, list] of byType) {
+        if (!list.length) continue;
+        ctx.strokeStyle = this.c(type);
+        ctx.beginPath();
+        for (const e of list) this.strokeEdge(e);
+        ctx.stroke();
+      }
       ctx.globalAlpha = alpha * 0.9;
       ctx.strokeStyle = this.theme.highlight;
       ctx.lineWidth = lw * 0.5;
       ctx.setLineDash([10, 26]);
       ctx.lineDashOffset = -time * 90;
+      ctx.beginPath();
+      for (const e of glowEdges) this.strokeEdge(e);
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -517,7 +643,7 @@ export class Renderer {
       if (!e) continue;
       const sel = e === eng.selEdge;
       ctx.beginPath();
-      strokeSegs(ctx, edgeSegs(e));
+      this.strokeEdge(e);
       ctx.globalAlpha = alpha * (sel ? 0.4 : 0.22);
       ctx.strokeStyle = this.c(e.a.type);
       ctx.lineWidth = lw * (sel ? 7 : 5);
@@ -714,7 +840,7 @@ export class Renderer {
         const e = f.e;
         ctx.lineCap = 'round';
         ctx.beginPath();
-        strokeSegs(ctx, edgeSegs(e));
+        this.strokeEdge(e);
         ctx.globalAlpha = k * 0.35;
         ctx.strokeStyle = this.c(e.a.type);
         ctx.lineWidth = lw * 6;

@@ -33,6 +33,11 @@ export interface SyncResult {
   promoted: Array<[string, string]>;
   /** Connections the host's data just stopped marking pending (saved): they get the settle pulse. */
   settled: string[];
+  /** Assets whose name, status or ports changed in place (not new ones): what a live feed would highlight. */
+  changedAssets: AssetNode[];
+  /** Connections created and removed by this sync (so routing can be updated in place). */
+  addedEdges: Edge[];
+  removedEdges: Edge[];
 }
 
 const edgeKey = (aId: string, fpId: string, bId: string, tpId: string) =>
@@ -49,6 +54,9 @@ export class GraphStore {
   nodes: AssetNode[] = []; // insertion order, kept in step with `assets`
   edgeList: Edge[] = [];
   private localByKey = new Map<string, Edge>();
+  // a copy of last sync's arrays: Apollo hands back new arrays whose unchanged entities sit at the same index
+  private prevAssets: readonly AssetInput[] = [];
+  private prevConns: readonly ConnectionInput[] = [];
   private localSeq = 0;
 
   private makePort(raw: PortInput): Port {
@@ -74,7 +82,9 @@ export class GraphStore {
       h: cardHeight({ ins, outs }),
       layer: 0,
       g: null,
+      og: null,
       ord: 0,
+      pulse: undefined,
       gl: 0,
       bt: null,
       bside: -1,
@@ -171,6 +181,7 @@ export class GraphStore {
     if (!gone.size) return;
     const touched = new Set<AssetNode>();
     for (const e of gone) {
+      if (!e.local) this.prevConns = []; // the model no longer matches the last payload: the next sync takes the full path
       this.edgesById.delete(e.id);
       if (e.local)
         this.localByKey.delete(edgeKey(e.a.id, e.fp.id, e.b.id, e.tp.id));
@@ -251,12 +262,16 @@ export class GraphStore {
       visited: 0,
       promoted: [],
       settled: [],
+      addedEdges: [],
+      removedEdges: [],
+      changedAssets: [],
     };
     const doomed = new Set<Edge>();
 
     // ---- assets
+    const fastA = this.syncAssetsFast(input.assets, res, doomed);
     const seenA = new Set<string>();
-    for (const raw of input.assets) {
+    for (const raw of fastA ? [] : input.assets) {
       seenA.add(raw.id);
       const n = this.assets.get(raw.id);
       if (!n) {
@@ -270,40 +285,9 @@ export class GraphStore {
       }
       if (n.raw === raw) continue;
       res.visited++;
-      n.raw = raw;
-      let changed = false;
-      if (n.name !== raw.name) {
-        n.name = raw.name;
-        changed = true;
-      }
-      const status = raw.status ?? 'ready';
-      if (n.status !== status) {
-        n.status = status;
-        changed = true;
-      }
-      if (n.type !== raw.type) {
-        n.type = raw.type;
-        changed = true;
-        res.structural = true;
-      }
-      const pr = { changed: false };
-      for (const e of this.reconcilePorts(n, 'in', raw.inputPorts, pr))
-        doomed.add(e);
-      for (const e of this.reconcilePorts(n, 'out', raw.outputPorts, pr))
-        doomed.add(e);
-      if (pr.changed) {
-        changed = true;
-        this.reindex(n);
-        const h = cardHeight(n);
-        if (n.g && h > n.g.mh) res.structural = true;
-        n.h = h;
-      }
-      if (changed) {
-        res.assets.changed++;
-        res.visual = true;
-      }
+      this.updateAsset(n, raw, res, doomed);
     }
-    const goneAssets = this.nodes.filter((n) => !seenA.has(n.id));
+    const goneAssets = fastA ? [] : this.nodes.filter((n) => !seenA.has(n.id));
     if (goneAssets.length) {
       for (const n of goneAssets) {
         this.assets.delete(n.id);
@@ -317,8 +301,9 @@ export class GraphStore {
     }
 
     // ---- connections
+    const fastE = this.syncConnectionsFast(input.connections, res);
     const seenE = new Set<string>();
-    for (const raw of input.connections) {
+    for (const raw of fastE ? [] : input.connections) {
       seenE.add(raw.id);
       const e = this.edgesById.get(raw.id);
       if (e && e.raw === raw) continue;
@@ -365,8 +350,9 @@ export class GraphStore {
       res.connections.added++;
     }
     const missing: Edge[] = [];
-    for (const e of this.edgeList)
-      if (!e.local && !seenE.has(e.id)) missing.push(e);
+    if (!fastE)
+      for (const e of this.edgeList)
+        if (!e.local && !seenE.has(e.id)) missing.push(e);
     if (missing.length && this.pendingNew.length) {
       // an optimistic response swaps a temporary id for the real one: the same wire under a new id is a rename
       const byKey = new Map(
@@ -402,6 +388,7 @@ export class GraphStore {
     }
     if (doomed.size) {
       this.removeEdges(doomed);
+      for (const e of doomed) res.removedEdges.push(e);
       res.routing = res.visual = true;
     }
     for (const p of this.pendingNew) {
@@ -411,10 +398,127 @@ export class GraphStore {
         (!p.b.in.length && !p.b.out.length)
       )
         res.structural = true;
-      this.makeEdge(p.raw.id, p.a, p.fp, p.b, p.tp, p.raw, false);
+      res.addedEdges.push(
+        this.makeEdge(p.raw.id, p.a, p.fp, p.b, p.tp, p.raw, false),
+      );
     }
     this.pendingNew.length = 0;
+    this.prevAssets = input.assets.slice();
+    this.prevConns = input.connections.slice();
     return res;
+  }
+
+  private updateAsset(
+    n: AssetNode,
+    raw: AssetInput,
+    res: SyncResult,
+    doomed: Set<Edge>,
+  ): void {
+    n.raw = raw;
+    let changed = false;
+    if (n.name !== raw.name) {
+      n.name = raw.name;
+      changed = true;
+    }
+    const status = raw.status ?? 'ready';
+    if (n.status !== status) {
+      n.status = status;
+      changed = true;
+    }
+    if (n.type !== raw.type) {
+      n.type = raw.type;
+      changed = true;
+      res.structural = true;
+    }
+    const pr = { changed: false };
+    for (const e of this.reconcilePorts(n, 'in', raw.inputPorts, pr))
+      doomed.add(e);
+    for (const e of this.reconcilePorts(n, 'out', raw.outputPorts, pr))
+      doomed.add(e);
+    if (pr.changed) {
+      changed = true;
+      this.reindex(n);
+      const h = cardHeight(n);
+      if (n.g && h > n.g.mh) res.structural = true;
+      n.h = h;
+    }
+    if (changed) {
+      res.assets.changed++;
+      res.changedAssets.push(n);
+      res.visual = true;
+    }
+  }
+
+  /**
+   * Steady state: the same entities in the same order, some replaced by changed copies. Compares position by position
+   * (no lookups, no sets) and only touches what differs. Returns false, having changed nothing, if membership or order
+   * differs, so the full path decides.
+   */
+  private syncAssetsFast(
+    list: readonly AssetInput[],
+    res: SyncResult,
+    doomed: Set<Edge>,
+  ): boolean {
+    const prev = this.prevAssets;
+    if (prev.length !== list.length) return false;
+    let changed: number[] | null = null;
+    for (let i = 0; i < list.length; i++) {
+      const raw = list[i]!;
+      if (raw === prev[i]) continue;
+      if (raw.id !== prev[i]!.id || !this.assets.has(raw.id)) return false;
+      (changed ??= []).push(i);
+    }
+    if (changed)
+      for (const i of changed) {
+        const raw = list[i]!;
+        const n = this.assets.get(raw.id)!;
+        if (n.raw === raw) continue;
+        res.visited++;
+        this.updateAsset(n, raw, res, doomed);
+      }
+    return true;
+  }
+
+  /** The same, for connections: only a flag change (enabled / pending) in place qualifies; anything else takes the full path. */
+  private syncConnectionsFast(
+    list: readonly ConnectionInput[],
+    res: SyncResult,
+  ): boolean {
+    const prev = this.prevConns;
+    if (prev.length !== list.length) return false;
+    let changed: number[] | null = null;
+    for (let i = 0; i < list.length; i++) {
+      const raw = list[i]!;
+      if (raw === prev[i]) continue;
+      const e = this.edgesById.get(raw.id);
+      if (
+        raw.id !== prev[i]!.id ||
+        !e ||
+        e.a.id !== raw.from.assetId ||
+        e.fp.id !== raw.from.portId ||
+        e.b.id !== raw.to.assetId ||
+        e.tp.id !== raw.to.portId
+      )
+        return false;
+      (changed ??= []).push(i);
+    }
+    if (changed)
+      for (const i of changed) {
+        const raw = list[i]!;
+        const e = this.edgesById.get(raw.id)!;
+        res.visited++;
+        e.raw = raw;
+        const enabled = raw.enabled !== false;
+        const pending = !!raw.pending;
+        if (e.enabled !== enabled || e.pending !== pending) {
+          if (e.pending && !pending) res.settled.push(e.id);
+          e.enabled = enabled;
+          e.pending = pending;
+          res.connections.changed++;
+          res.visual = true;
+        }
+      }
+    return true;
   }
 
   private pendingNew: Array<{

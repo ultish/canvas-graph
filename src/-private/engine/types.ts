@@ -69,7 +69,11 @@ export interface AssetNode {
   h: number;
   layer: number;
   g: Group | null;
+  /** Only during a relayout: the group this asset belonged to before it. */
+  og: Group | null;
   ord: number;
+  /** When the host's data last changed this asset (seconds): a short highlight ring while it is recent. */
+  pulse: number | undefined;
   // render-only state, kept on the node so the draw loop never allocates
   gl: number;
   bt: number | null;
