@@ -21,7 +21,8 @@
 
     <script type="module">
       import { start } from "./test-helper.js";
-      import.meta.glob("./**/*.{js,ts,gjs,gts}", { eager: true });
+      // ./engine holds the Vitest suite (run with `pnpm test:engine`, in Node): it must not be bundled for the browser
+      import.meta.glob(["./**/*.{js,ts,gjs,gts}", "!./engine/**"], { eager: true });
       start();
     </script>
   </body>
