@@ -7,6 +7,7 @@
 
 export interface LayoutConfig {
   PAD: number; // frame padding around a group
+  GAP_CARD: number; // clear space between cards in a group's grid (rows)
   CW: number; // grid cell width inside a group
   NODE_W: number;
   GAP_LAYER: number; // frame-to-frame distance between columns
@@ -60,6 +61,7 @@ export interface LayoutOutput {
 export function computeLayout(input: LayoutInput): LayoutOutput {
   const { n, m, h, type, ea, eb, cfg } = input;
   const PAD = cfg.PAD;
+  const GAP_CARD = cfg.GAP_CARD;
   const CW = cfg.CW;
   const NODE_W = cfg.NODE_W;
   const GAP_LAYER = cfg.GAP_LAYER;
@@ -163,7 +165,7 @@ export function computeLayout(input: LayoutInput): LayoutOutput {
   /** A group as a roughly square grid of cards. */
   const sizeGroup = (g: number): void => {
     const cnt = gCnt[g]!;
-    gRh[g] = gMh[g]! + 30;
+    gRh[g] = gMh[g]! + GAP_CARD;
     const rows = Math.max(1, Math.ceil(Math.sqrt((cnt * CW) / gRh[g])));
     gRows[g] = rows;
     const cols = Math.ceil(cnt / rows);

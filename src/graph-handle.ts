@@ -4,7 +4,10 @@ import type {
   EngineEvents,
   GraphEngine,
 } from './-private/engine/engine.ts';
-import type { SelectionPayload } from './-private/engine/payloads.ts';
+import type {
+  GroupSummary,
+  SelectionPayload,
+} from './-private/engine/payloads.ts';
 import type { Port } from './-private/engine/types.ts';
 
 export interface AssetView {
@@ -23,6 +26,9 @@ export interface AssetView {
 export class GraphHandle {
   /** What is selected right now, as plain data (or null). */
   @tracked selection: SelectionPayload | null = null;
+
+  /** The group (its `key`) a name search is limited to, or null for all assets. Shared by the search box and the inspector. */
+  @tracked searchScope: string | null = null;
 
   constructor(
     private readonly engine: GraphEngine,
@@ -95,9 +101,43 @@ export class GraphHandle {
     this.engine.setFound(ids);
   }
 
-  /** The ids, among `ids`, whose name contains `text` (case-insensitive). */
-  findAssets(ids: readonly string[], text: string): string[] {
-    return this.engine.findAssets(ids, text);
+  /** Limit name searches to one group (by its `key`), or pass null to search everything. */
+  searchInGroup(key: string | null): void {
+    if (this.searchScope === key) return;
+    this.searchScope = key;
+    this.engine.announce('searchScope', {
+      key,
+      group: this.scopeGroup ?? null,
+    });
+  }
+
+  /**
+   * The user chose this asset in a search box: tell `searchPick` listeners, then (unless one returned `false`) select
+   * it and move the camera to it. Returns whether the default happened.
+   */
+  chooseAsset(
+    hit: { id: string; name: string; type: string },
+    zoom = 0.55,
+  ): boolean {
+    if (this.engine.announce('searchPick', hit).includes(false)) return false;
+    this.selectAsset(hit.id);
+    this.focusAsset(hit.id, zoom);
+    return true;
+  }
+
+  /** The group a search is limited to, if it still exists. */
+  get scopeGroup(): GroupSummary | undefined {
+    const g = this.searchScope
+      ? this.engine.groupByKey(this.searchScope)
+      : undefined;
+    return (
+      g && { key: g.key, type: g.type, layer: g.layer, count: g.nodes.length }
+    );
+  }
+
+  /** Groups whose type contains `text`. */
+  searchGroups(text: string, limit = 3): GroupSummary[] {
+    return this.engine.searchGroups(text, limit);
   }
 
   /** Remove the temporary link shown after a group drag (call it if you cancel your own connect UI). */
@@ -149,8 +189,25 @@ export class GraphHandle {
     this.engine.fitAll();
   }
 
-  focusAsset(id: string): boolean {
-    return this.engine.focusAsset(id);
+  /** Centre on an asset. `minScale` is the least zoom to end at (default 0.8: card details are readable from 0.5). */
+  focusAsset(id: string, minScale?: number): boolean {
+    return this.engine.focusAsset(id, minScale);
+  }
+
+  /**
+   * Assets whose name contains `text` (case-insensitive), names that start with it first. Limited to the group in
+   * `searchScope` if there is one. `hits` is the first `limit`; `all` is every match's id (up to 200), for `highlightAssets`.
+   */
+  searchAssets(
+    text: string,
+    limit = 10,
+  ): {
+    total: number;
+    hits: Array<{ id: string; name: string; type: string }>;
+    all: string[];
+  } {
+    const scope = this.scopeGroup ? this.searchScope : null;
+    return this.engine.searchAssets(text, limit, scope);
   }
 
   focusPipeline(index: number): void {

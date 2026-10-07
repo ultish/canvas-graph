@@ -6,7 +6,9 @@ import {
   describeGroup,
   describeGroupEdge,
   describeNode,
+  groupSummary,
   portRef,
+  type GroupSummary,
   type PortRef,
   type SelectionPayload,
 } from './payloads.ts';
@@ -75,6 +77,10 @@ export interface EngineEvents {
   connectRequest: ConnectRequest;
   disconnectRequest: DisconnectRequest;
   invalidate: undefined;
+  /** The group a name search is limited to changed (`null`: everything). */
+  searchScope: { key: string | null; group: GroupSummary | null };
+  /** The user chose an asset in a search box. A handler that returns `false` takes over: nothing is selected or focused. */
+  searchPick: { id: string; name: string; type: string };
 }
 
 export interface ConnectSpec {
@@ -173,6 +179,14 @@ export class GraphEngine {
 
   on = this.emitter.on.bind(this.emitter);
 
+  /** Tell listeners about something the UI layer did (what they return is for the caller to read, e.g. a veto). */
+  announce<K extends keyof EngineEvents>(
+    type: K,
+    value: EngineEvents[K],
+  ): unknown[] {
+    return this.emitter.emit(type, value);
+  }
+
   nextPickStamp(): number {
     return ++this.stamp;
   }
@@ -208,14 +222,65 @@ export class GraphEngine {
     this.invalidate();
   }
 
-  /** Centre on an asset, zooming in far enough to read its card. */
-  focusAsset(id: string): boolean {
+  /** A group by its `key` (as selection payloads and `searchGroups` report it), or undefined once it is gone. */
+  groupByKey(key: string): Group | undefined {
+    return this.groups.find((g) => g.key === key);
+  }
+
+  /** Groups whose type contains the text (case-insensitive), as the same summaries selections use. */
+  searchGroups(text: string, limit: number): GroupSummary[] {
+    const q = text.trim().toLowerCase();
+    if (!q) return [];
+    return this.groups
+      .filter((g) => g.type.toLowerCase().includes(q))
+      .slice(0, limit)
+      .map(groupSummary);
+  }
+
+  /**
+   * Assets whose name contains the text (case-insensitive), names that start with it first. `scope` is a group key:
+   * only that group's assets are searched. `hits` is the first `limit`; `all` is every match's id, capped at 200,
+   * for ringing them on the canvas.
+   */
+  searchAssets(
+    text: string,
+    limit: number,
+    scope?: string | null,
+  ): {
+    total: number;
+    hits: Array<{ id: string; name: string; type: string }>;
+    all: string[];
+  } {
+    const q = text.trim().toLowerCase();
+    const pool = scope
+      ? (this.groupByKey(scope)?.nodes ?? [])
+      : this.store.nodes;
+    if (!q) return { total: 0, hits: [], all: [] };
+    const starts: AssetNode[] = [];
+    const inside: AssetNode[] = [];
+    for (const n of pool) {
+      const at = n.name.toLowerCase().indexOf(q);
+      if (at === 0) starts.push(n);
+      else if (at > 0) inside.push(n);
+    }
+    const all = starts.concat(inside);
+    return {
+      total: all.length,
+      hits: all
+        .slice(0, limit)
+        .map((n) => ({ id: n.id, name: n.name, type: n.type })),
+      all: all.slice(0, 200).map((n) => n.id),
+    };
+  }
+
+  /** Centre on an asset, zooming in far enough to read its card (`minScale`: how far in, at least). */
+  focusAsset(id: string, minScale = 0.8): boolean {
     const n = this.store.assets.get(id);
     if (!n) return false;
     this.viewport.centerOn(
       n.x + n.w / 2,
       n.y + n.h / 2,
-      Math.max(this.viewport.targetScale, 0.8),
+      Math.max(this.viewport.targetScale, minScale),
     );
     this.invalidate();
     return true;
@@ -421,15 +486,6 @@ export class GraphEngine {
       if (n) f.add(n);
     }
     this.invalidate();
-  }
-
-  /** Assets of these ids (a group's) whose name contains the text, case-insensitively. */
-  findAssets(ids: readonly string[], text: string): string[] {
-    const q = text.trim().toLowerCase();
-    if (!q) return [];
-    return ids.filter((id) =>
-      this.store.assets.get(id)?.name.toLowerCase().includes(q),
-    );
   }
 
   select(sel: SelectionInput): void {

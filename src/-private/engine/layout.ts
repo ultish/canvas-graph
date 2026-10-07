@@ -6,18 +6,19 @@ import {
 } from './layout-core.ts';
 import type { AssetNode, Comp, Edge, Group, GroupEdge } from './types.ts';
 
-export const PAD = 40; // frame padding around a group
-export const CW = 230; // grid cell width inside a group
+export const GAP_CARD = 64; // clear space between cards in a group's grid, both ways, and between the grid and its frame
+export const PAD = GAP_CARD; // frame padding around a group
 export const NODE_W = 200;
+export const CW = NODE_W + GAP_CARD; // grid cell width inside a group
 export const GAP_LAYER = 420; // frame-to-frame distance between columns
 export const GAP_GROUP = 80; // frame-to-frame distance between groups stacked in a layer
 export const GAP_COMP = 1600; // between rows of pipelines (loop lanes live in this gap)
 export const GAP_COMP_X = 800; // between pipelines side by side
-export const PORT_Y0 = 62;
+export const PORT_Y0 = 52; // the first port's height, and its distance from the card's bottom edge to the last port
 export const PORT_DY = 20;
 
 export const cardHeight = (n: Pick<AssetNode, 'ins' | 'outs'>): number =>
-  PORT_Y0 + PORT_DY * Math.max(1, n.ins.length, n.outs.length) + 22;
+  2 * PORT_Y0 + PORT_DY * (Math.max(1, n.ins.length, n.outs.length) - 1);
 
 export const portY = (n: AssetNode, k: number): number =>
   n.y + PORT_Y0 + k * PORT_DY;
@@ -29,6 +30,7 @@ export interface LayoutResult {
 
 export const LAYOUT_CONFIG: LayoutConfig = {
   PAD,
+  GAP_CARD,
   CW,
   NODE_W,
   GAP_LAYER,

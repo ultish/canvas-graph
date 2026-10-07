@@ -4,6 +4,7 @@ import {
   describeGroup,
   describeGroupEdge,
   describeNode,
+  LINKS_SHOWN,
 } from '../../src/-private/engine/payloads.ts';
 import { fan, loop } from './fixtures.ts';
 import { laidOut } from './support.ts';
@@ -22,6 +23,19 @@ describe('payloads', () => {
     });
     expect(p.ingressPorts).toHaveLength(10);
     expect(p.egressPorts).toEqual([{ id: 'f-sw:out:A', name: 'A', count: 40 }]);
+  });
+
+  it('lists who an asset is connected to, port to port, capped but with exact counts', () => {
+    const p = describeNode(store.assets.get('f-sw')!);
+    expect(p.incoming).toHaveLength(10);
+    expect(p.outgoing).toHaveLength(LINKS_SHOWN);
+    expect(p.outCount).toBe(40);
+    const first = p.outgoing[0]!;
+    expect(first.own).toEqual({ id: 'f-sw:out:A', name: 'A' });
+    expect(first.other).toMatchObject({
+      id: store.edgesById.get(first.id)!.b.id,
+      name: store.edgesById.get(first.id)!.b.name,
+    });
   });
 
   it('describes a connection by asset id and port object, with its route', () => {

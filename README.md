@@ -94,7 +94,7 @@ Cmd/Ctrl+Z undoes by asking you for the inverse: undoing a connect is a disconne
 
 ```ts
 handle.selection; // tracked: the selected asset / connection / group pipe / group, as plain data
-handle.on('select' | 'change' | 'sync' | 'layout' | 'connectRequest' | ..., fn, { passive })
+handle.on('select' | 'change' | 'sync' | 'layout' | 'connectRequest' | 'disconnectRequest' | 'searchScope' | 'searchPick', fn, { passive })
 handle.connectMany(specs); // show connections now; ports you name that the canvas hasn't seen are created
 handle.disconnect(ids);
 handle.confirm(ids); handle.revert(ids); handle.undo();
@@ -102,6 +102,19 @@ handle.selectAsset(id); handle.selectConnection(id); handle.clearSelection(); ha
 handle.fit(); handle.focusAsset(id); handle.focusPipeline(i); handle.relayout();
 handle.asset(id); // the asset and its ports as the canvas knows them
 ```
+
+`<GraphSearch @handle={{this.handle}} />` is one search box over every asset's name: typing lists matching groups and assets, every match is ringed on the canvas, and choosing an asset selects it and moves the camera to it (`@zoom` sets how far in, 0.55 by default). Choosing a group (or the inspector's "Search in this group" button) limits the search to that group, shown as a chip you can clear. Build your own with `handle.searchAssets(text)`, `searchGroups(text)`, `highlightAssets(ids)`, `searchInGroup(key | null)`, `selectAsset(id)` and `focusAsset(id, minScale)`.
+
+Everything the built-in panels do goes through the handle and fires an event, so you can do something else with it instead:
+
+| event | when | what you get / can do |
+| --- | --- | --- |
+| `select` | the selection changed | the payload (asset, connection, group pipe, group), or `null` |
+| `connectRequest` | a port or group drag, or the connect dialog, asks to connect | handle it (return a Promise to save), or call `handle.confirm` / `revert` later |
+| `disconnectRequest` | the user deleted wires | same |
+| `searchPick` | the user chose an asset in a search box | `{ id, name, type }`; return `false` to take over (nothing is selected or focused) |
+| `searchScope` | the group a search is limited to changed | `{ key, group }`, `null` when cleared |
+| `change` / `sync` / `layout` | the model, your data, or the layout changed | summaries of what changed |
 
 `<GraphInspector>` and `<GraphConnectDialog>` are optional and replaceable: they only read `handle.selection` and listen passively to requests (a passive listener is never counted as "the host"). Pass `@onConnect={{this.save}}` to the dialog to receive the chosen pairings and persist them yourself.
 

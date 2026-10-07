@@ -6,6 +6,7 @@ import { tracked } from '@glimmer/tracking';
 import GraphCanvas from '#src/components/graph-canvas.gts';
 import GraphConnectDialog from '#src/components/graph-connect-dialog.gts';
 import GraphInspector from '#src/components/graph-inspector.gts';
+import GraphSearch from '#src/components/graph-search.gts';
 import ThemeSelect from './components/theme-select.gts';
 import type { FrameStats, GraphHandle, SyncResult } from '#src/index.ts';
 import '#src/styles/canvas-graph.css';
@@ -114,6 +115,7 @@ export default class Demo extends Component {
             <option value="instant">instant</option>
           </select>
         </label>
+        <GraphSearch @handle={{this.handle}} />
         <span class="demo__hud">{{this.hud}}</span>
         <span class="demo__hud">{{this.lastSync}}</span>
       </header>

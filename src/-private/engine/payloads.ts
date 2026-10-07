@@ -20,6 +20,15 @@ export interface NamedCount {
   count: number;
 }
 
+/** One connection of an asset, from its point of view: its own port, and the asset and port at the other end. */
+export interface Link {
+  id: string;
+  own: PortRef;
+  other: Endpoint;
+}
+/** How many of an asset's connections a node payload lists (the counts are always exact). */
+export const LINKS_SHOWN = 20;
+
 export interface NodePayload {
   kind: 'node';
   id: string;
@@ -32,6 +41,10 @@ export interface NodePayload {
   outCount: number;
   ingressPorts: PortCount[];
   egressPorts: PortCount[];
+  /** Connections into this asset (the first `LINKS_SHOWN`): `own` is its ingress port, `other` the sender's egress port. */
+  incoming: Link[];
+  /** Connections out of this asset: `own` is its egress port, `other` the receiver's ingress port. */
+  outgoing: Link[];
 }
 export interface Endpoint {
   id: string;
@@ -127,6 +140,16 @@ export function describeNode(n: AssetNode): NodePayload {
     egressPorts: n.outs.map((p) => ({
       ...portRef(p),
       count: n.out.filter((e) => e.fp === p).length,
+    })),
+    incoming: n.in.slice(0, LINKS_SHOWN).map((e) => ({
+      id: e.id,
+      own: portRef(e.tp),
+      other: endpoint(e.a, e.fp),
+    })),
+    outgoing: n.out.slice(0, LINKS_SHOWN).map((e) => ({
+      id: e.id,
+      own: portRef(e.fp),
+      other: endpoint(e.b, e.tp),
     })),
   };
 }

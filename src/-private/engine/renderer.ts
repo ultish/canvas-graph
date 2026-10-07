@@ -7,6 +7,8 @@ import { DARK, resolveTheme, type Theme } from './theme.ts';
 import { edgeSegs, groupEdgeSegs, pipePx } from './routes.ts';
 import type { AssetNode, Cubic, Edge } from './types.ts';
 
+// under half the gap between cards in a grid (GAP_CARD), so two facing stubs never meet
+const STUB_LEN = 24;
 const FONT = '-apple-system,system-ui,sans-serif';
 
 export interface FrameStats {
@@ -777,6 +779,7 @@ export class Renderer {
       ctx.lineWidth = lw * (sel ? 1.8 : 1.5);
       ctx.stroke();
     }
+    this.drawStubs(vis, alpha);
     for (const n of vis) this.drawCard(n, alpha, dim, s, time);
     if (eng.selEdge) {
       // ring both ends of the selected wire
@@ -794,6 +797,43 @@ export class Renderer {
       }
     }
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Off-screen connections: one stub per port with a count, not N overlapping wires. Drawn before every card, like the
+   * wires, so a stub never lands on top of one neighbour and under another; it fades out so it reads as "continues".
+   */
+  private drawStubs(vis: ReadonlySet<AssetNode>, alpha: number): void {
+    const ctx = this.ctx;
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = 'round';
+    for (const n of vis) {
+      for (let k = 0; k < n.ins.length; k++)
+        this.stub(n.x, portY(n, k), -1, n.hiP[k] ?? 0);
+      for (let k = 0; k < n.outs.length; k++)
+        this.stub(n.x + n.w, portY(n, k), 1, n.hoP[k] ?? 0);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  private stub(x: number, y: number, dir: 1 | -1, hidden: number): void {
+    if (!hidden) return;
+    const ctx = this.ctx;
+    const w = Math.min(14, 2 + Math.log2(hidden + 1) * 1.2);
+    const c = 3 + w / 2;
+    // both ends point the way the data flows (out of an output, into an input), so two facing stubs read as a flow
+    // and not as a collision; neutral, not the wire's colour, so they never read as a link to the card there
+    const tip = dir > 0 ? x + STUB_LEN : x - 8;
+    ctx.strokeStyle = this.theme.textMuted;
+    ctx.lineWidth = Math.max(2, w * 0.6);
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x + dir * STUB_LEN, y);
+    ctx.lineTo(x, y);
+    ctx.moveTo(tip - c, y - c);
+    ctx.lineTo(tip, y);
+    ctx.lineTo(tip - c, y + c);
+    ctx.stroke();
   }
 
   private drawCard(
@@ -858,7 +898,7 @@ export class Renderer {
     ctx.font = `12px ${FONT}`;
     ctx.fillText(
       `${n.type} · in ${n.in.length} out ${n.out.length}`,
-      n.x + 18,
+      n.x + 34,
       n.y + 52,
     );
     const ok = n.status === 'ready';
@@ -881,7 +921,6 @@ export class Renderer {
         -1,
         n.hiP[k] ?? 0,
         p.name,
-        n.hiC[k] || col,
         time,
       ),
     );
@@ -894,7 +933,6 @@ export class Renderer {
         1,
         n.hoP[k] ?? 0,
         p.name,
-        col,
         time,
       ),
     );
@@ -908,7 +946,6 @@ export class Renderer {
     dir: 1 | -1,
     hidden: number,
     label: string,
-    stub: string,
     time: number,
   ): void {
     const ctx = this.ctx;
@@ -929,18 +966,11 @@ export class Renderer {
     ctx.fillText(label, x - dir * 14, y + 4);
     ctx.textAlign = 'left';
     if (hidden) {
-      // off-screen connections: one stub with a count, not N overlapping wires
-      ctx.strokeStyle = stub + '99';
-      ctx.lineWidth = Math.min(14, 2 + Math.log2(hidden + 1) * 1.2);
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + dir * 90, y);
-      ctx.stroke();
       if (hidden > 1) {
         ctx.fillStyle = this.theme.label;
         ctx.font = `600 12px ${FONT}`;
         ctx.textAlign = dir > 0 ? 'left' : 'right';
-        ctx.fillText(`+${hidden}`, x + dir * 98, y + 4);
+        ctx.fillText(`+${hidden}`, x + dir * 6, y - 9);
         ctx.textAlign = 'left';
       }
     }

@@ -7,6 +7,7 @@ import {
   GAP_GROUP,
   GAP_LAYER,
   NODE_W,
+  GAP_CARD,
   PAD,
 } from '../../src/-private/engine/layout.ts';
 import type {
@@ -86,7 +87,7 @@ function makeGroup(
 function sizeGroup(g: Group): void {
   const cnt = g.nodes.length;
   g.mh = g.nodes.reduce((m, n) => Math.max(m, n.h), 0);
-  g.rh = g.mh + 30;
+  g.rh = g.mh + GAP_CARD;
   g.rows = Math.max(1, Math.ceil(Math.sqrt((cnt * CW) / g.rh)));
   const cols = Math.ceil(cnt / g.rows);
   g.w = (cols - 1) * CW + NODE_W;

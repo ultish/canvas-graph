@@ -2,11 +2,13 @@
 import type GraphCanvas from './components/graph-canvas.gts';
 import type GraphConnectDialog from './components/graph-connect-dialog.gts';
 import type GraphInspector from './components/graph-inspector.gts';
+import type GraphSearch from './components/graph-search.gts';
 import type graphCanvas from './modifiers/graph-canvas.ts';
 
 export default interface Registry {
   GraphCanvas: typeof GraphCanvas;
   GraphInspector: typeof GraphInspector;
   GraphConnectDialog: typeof GraphConnectDialog;
+  GraphSearch: typeof GraphSearch;
   'graph-canvas': typeof graphCanvas;
 }

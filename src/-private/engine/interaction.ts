@@ -1,10 +1,4 @@
-import {
-  CARD_MARGIN_PX,
-  ELEC_PX,
-  REACH_WORLD,
-  GROUP_SCALE,
-  NEAR_SCALE,
-} from './constants.ts';
+import { reachAt, GROUP_SCALE, NEAR_SCALE } from './constants.ts';
 import type { GraphEngine } from './engine.ts';
 import { PAD, portY } from './layout.ts';
 import {
@@ -177,24 +171,20 @@ export class Interaction {
   private nearGroup(c: GroupDrag, s: number): void {
     const eng = this.engine;
     let best: Group | null = null;
-    const reach = Math.min(ELEC_PX / s, REACH_WORLD);
+    const reach = reachAt(s);
     let bd = reach;
-    const over = pickGroup(c.x, c.y, s, eng.groups);
-    if (over && over !== c.from) {
-      best = over;
-      bd = 0;
-    } else
-      for (const g of eng.groups) {
-        if (g === c.from) continue;
-        const d = Math.hypot(
-          (c.dir > 0 ? g.x - PAD : g.x + g.w + PAD) - c.x,
-          g.y + g.h / 2 - c.y,
-        );
-        if (d < bd) {
-          bd = d;
-          best = g;
-        }
+    for (const g of eng.groups) {
+      // only the handle counts, not the (possibly huge) box behind it: the arc dies once you leave its radius
+      if (g === c.from) continue;
+      const d = Math.hypot(
+        (c.dir > 0 ? g.x - PAD : g.x + g.w + PAD) - c.x,
+        g.y + g.h / 2 - c.y,
+      );
+      if (d < bd) {
+        bd = d;
+        best = g;
       }
+    }
     c.near = best;
     c.elec = best ? 1 - bd / reach : 0;
     c.target = best;
@@ -403,42 +393,24 @@ export class Interaction {
     if (!c) return;
     // the nearest opposite-side port in range: the ring and arc show within reach, and a release there connects
     let best: { node: AssetNode; idx: number } | null = null;
-    const reach = Math.min(ELEC_PX / s, REACH_WORLD);
-    let bd = reach; // distance used for the arc's intensity
-    let bRank = 3; // 0: a port in reach, 1: only the card is under the cursor (or its margin)
-    let bNd = Infinity;
-    const m = CARD_MARGIN_PX / s;
+    const reach = reachAt(s);
+    let bd = reach;
     for (const o of vis) {
       if (o === c.from) continue;
       const arr = c.dir > 0 ? o.ins : o.outs;
       const ox = c.dir > 0 ? o.x : o.x + o.w;
-      let nk = -1;
-      let nd = Infinity;
+      // only a port's own radius counts, not the card around it: the arc dies once you leave it
       for (let k = 0; k < arr.length; k++) {
         const d = Math.hypot(ox - c.x, portY(o, k) - c.y);
-        if (d < nd) {
-          nd = d;
-          nk = k;
+        if (d < bd) {
+          bd = d;
+          best = { node: o, idx: k };
         }
       }
-      if (nk < 0) continue;
-      // the nearest port in reach wins, even if the cursor is still over another card; a card with no port in reach
-      // still takes a drop on it (or its margin)
-      const touching =
-        c.x >= o.x - m &&
-        c.x <= o.x + o.w + m &&
-        c.y >= o.y - m &&
-        c.y <= o.y + o.h + m;
-      const rank = nd < reach ? 0 : touching ? 1 : 3;
-      if (rank === 3 || rank > bRank || (rank === bRank && nd >= bNd)) continue;
-      bRank = rank;
-      bNd = nd;
-      bd = rank === 0 ? nd : 0;
-      best = { node: o, idx: nk };
     }
     c.near = best;
     c.elec = best ? 1 - bd / reach : 0;
-    c.target = best ? best : null; // anywhere the arc shows, letting go connects
+    c.target = best; // anywhere the arc shows, letting go connects
     if (best)
       c.pt = {
         x: best.node.x + (c.dir > 0 ? 0 : best.node.w),

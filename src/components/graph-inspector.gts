@@ -22,6 +22,12 @@ const ports = (list: ReadonlyArray<{ name: string; count: number }>): string =>
         .map((x) => `${x.name} ×${x.count}`)
         .join(', ') + (list.length > 4 ? ` +${list.length - 4}` : '')
     : 'none';
+/** One connection per line ("none" if there are none), with how many more there are than are listed. */
+const links = (lines: string[], total: number): string =>
+  lines.length
+    ? lines.join('\n') +
+      (total > lines.length ? `\n+${total - lines.length} more` : '')
+    : 'none';
 const group = (g: { type: string; count: number; layer: number }): string =>
   `${g.type} ×${g.count} · layer ${g.layer}`;
 
@@ -31,9 +37,6 @@ const group = (g: { type: string; count: number; layer: number }): string =>
  */
 export default class GraphInspector extends Component<GraphInspectorSignature> {
   @tracked armedFor: SelectionPayload | null = null;
-  @tracked query = '';
-  @tracked matches: string[] = [];
-  private queryKey = '';
 
   get selection(): SelectionPayload | null {
     return this.args.handle?.selection ?? null;
@@ -119,11 +122,21 @@ export default class GraphInspector extends Component<GraphInspectorSignature> {
           { label: 'Group', value: `${p.group.type} ×${p.group.count}` },
           {
             label: 'Ingress',
-            value: `${p.inCount} on ${ports(p.ingressPorts)}`,
+            value: links(
+              p.incoming.map(
+                (l) => `${l.other.name} · ${l.other.port.name} → ${l.own.name}`,
+              ),
+              p.inCount,
+            ),
           },
           {
             label: 'Egress',
-            value: `${p.outCount} on ${ports(p.egressPorts)}`,
+            value: links(
+              p.outgoing.map(
+                (l) => `${l.own.name} → ${l.other.port.name} · ${l.other.name}`,
+              ),
+              p.outCount,
+            ),
           },
         ];
     }
@@ -161,43 +174,22 @@ export default class GraphInspector extends Component<GraphInspectorSignature> {
     }
   };
 
-  /** The search box on a group's panel: ring and name the matching assets on the canvas, hiding nothing. */
-  get groupSearch(): { key: string; ids: readonly string[] } | null {
+  /** On a group's panel: limit the name search in the top bar to this group (or lift the limit). */
+  get searchScopeButton(): { label: string; on: boolean } | null {
     const p = this.selection;
-    return p?.kind === 'group' ? { key: p.key, ids: p.assetIds } : null;
+    if (p?.kind !== 'group') return null;
+    const on = this.args.handle?.searchScope === p.key;
+    return {
+      label: on ? 'Searching in this group · clear' : 'Search in this group',
+      on,
+    };
   }
 
-  get queryText(): string {
-    return this.queryKey === this.groupSearch?.key ? this.query : '';
-  }
-
-  get found(): Array<{ id: string; name: string }> {
-    if (this.queryKey !== this.groupSearch?.key) return [];
+  toggleSearchScope = (): void => {
+    const p = this.selection;
     const handle = this.args.handle;
-    return this.matches
-      .slice(0, 8)
-      .map((id) => ({ id, name: handle?.asset(id)?.name ?? id }));
-  }
-
-  get foundMore(): number {
-    return this.queryKey === this.groupSearch?.key
-      ? Math.max(0, this.matches.length - 8)
-      : 0;
-  }
-
-  search = (e: Event): void => {
-    const s = this.groupSearch;
-    const handle = this.args.handle;
-    if (!s || !handle) return;
-    this.queryKey = s.key;
-    this.query = (e.target as HTMLInputElement).value;
-    this.matches = handle.findAssets(s.ids, this.query);
-    handle.highlightAssets(this.matches);
-  };
-
-  goTo = (e: Event): void => {
-    const id = (e.currentTarget as HTMLElement).dataset['id'];
-    if (id) this.args.handle?.focusAsset(id);
+    if (p?.kind !== 'group' || !handle) return;
+    handle.searchInGroup(handle.searchScope === p.key ? null : p.key);
   };
 
   <template>
@@ -208,32 +200,13 @@ export default class GraphInspector extends Component<GraphInspectorSignature> {
           <div class="cg-panel__row"><span>{{row.label}}</span><b
             >{{row.value}}</b></div>
         {{/each}}
-        {{#if this.groupSearch}}
-          <div class="cg-panel__search">
-            <input
-              type="search"
-              placeholder="Find an asset in this group"
-              aria-label="Find an asset in this group"
-              value={{this.queryText}}
-              {{on "input" this.search}}
-            />
-            {{#if this.found.length}}
-              <ul>
-                {{#each this.found as |f|}}
-                  <li><button
-                      type="button"
-                      data-id={{f.id}}
-                      {{on "click" this.goTo}}
-                    >{{f.name}}</button></li>
-                {{/each}}
-                {{#if this.foundMore}}<li
-                    class="cg-panel__more"
-                  >+{{this.foundMore}}
-                    more, highlighted on the canvas</li>{{/if}}
-              </ul>
-            {{else if this.queryText}}
-              <div class="cg-panel__more">No match</div>
-            {{/if}}
+        {{#if this.searchScopeButton}}
+          <div class="cg-panel__actions">
+            <button
+              type="button"
+              class={{if this.searchScopeButton.on "cg-ok"}}
+              {{on "click" this.toggleSearchScope}}
+            >{{this.searchScopeButton.label}}</button>
           </div>
         {{/if}}
         {{#if this.action}}
