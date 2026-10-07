@@ -1,15 +1,12 @@
 import {
   CARD_MARGIN_PX,
   ELEC_PX,
+  REACH_WORLD,
   GROUP_SCALE,
-  MAG_PULL,
-  MAG_PX,
   NEAR_SCALE,
-  ringR,
-  SNAP_PX,
 } from './constants.ts';
 import type { GraphEngine } from './engine.ts';
-import { portY } from './layout.ts';
+import { PAD, portY } from './layout.ts';
 import {
   pickEdge,
   pickGroup,
@@ -18,7 +15,8 @@ import {
   pickPort,
 } from './picking.ts';
 import type { Renderer } from './renderer.ts';
-import type { AssetNode, Edge } from './types.ts';
+import type { GroupDrag } from './anim.ts';
+import type { AssetNode, Edge, Group } from './types.ts';
 
 /**
  * Pointer and keyboard input for a canvas: pan, wheel zoom, click to select, drag from a port (zoomed in) or a
@@ -142,6 +140,10 @@ export class Interaction {
           y: w.y,
           target: null,
           pull: 0,
+          near: null,
+          elec: 0,
+          snap: false,
+          pt: null,
         };
         this.setCursor('crosshair');
         this.renderer.invalidate();
@@ -163,14 +165,47 @@ export class Interaction {
     if (gconn) {
       gconn.x = w.x;
       gconn.y = w.y;
-      const t = pickGroup(w.x, w.y, vp.s, eng.groups);
-      gconn.target = t && t !== gconn.from ? t : null;
+      this.nearGroup(gconn, vp.s);
     } else if (conn) {
       conn.x = w.x;
       conn.y = w.y;
     } else if (vp.isDragging) vp.dragTo(p.x, p.y);
     this.renderer.invalidate();
   };
+
+  /** The group handle nearest the cursor on the opposite side: the ring and arc show within reach, and a release there connects (the same rule as ports). */
+  private nearGroup(c: GroupDrag, s: number): void {
+    const eng = this.engine;
+    let best: Group | null = null;
+    const reach = Math.min(ELEC_PX / s, REACH_WORLD);
+    let bd = reach;
+    const over = pickGroup(c.x, c.y, s, eng.groups);
+    if (over && over !== c.from) {
+      best = over;
+      bd = 0;
+    } else
+      for (const g of eng.groups) {
+        if (g === c.from) continue;
+        const d = Math.hypot(
+          (c.dir > 0 ? g.x - PAD : g.x + g.w + PAD) - c.x,
+          g.y + g.h / 2 - c.y,
+        );
+        if (d < bd) {
+          bd = d;
+          best = g;
+        }
+      }
+    c.near = best;
+    c.elec = best ? 1 - bd / reach : 0;
+    c.target = best;
+    c.pt = best
+      ? {
+          x: c.dir > 0 ? best.x - PAD : best.x + best.w + PAD,
+          y: best.y + best.h / 2,
+        }
+      : null;
+    c.snap = false; // no lock-on either: the arc keeps crackling until you release
+  }
 
   private onUp = (e: PointerEvent): void => {
     const eng = this.engine;
@@ -180,8 +215,9 @@ export class Interaction {
       const c = A.gconn;
       const rp = this.local(e);
       const rw = vp.toWorld(rp.x, rp.y);
-      const t = pickGroup(rw.x, rw.y, vp.s, eng.groups);
-      c.target = t && t !== c.from ? t : null;
+      c.x = rw.x; // resolve the target at the release point, as a port drag does
+      c.y = rw.y;
+      this.nearGroup(c, vp.s);
       A.gconn = null;
       this.setCursor('');
       if (c.target) {
@@ -359,23 +395,23 @@ export class Interaction {
         port ? 'crosshair' : A.hoverEdge || A.hoverGE ? 'pointer' : '',
       );
     }
-    if (A.gconn)
-      A.gconn.pull += ((A.gconn.target ? 1 : 0) - A.gconn.pull) * 0.3;
+    if (A.gconn) {
+      const g = A.gconn;
+      g.pull += (0 - g.pull) * 0.3; // no magnet: the tip stays under the cursor
+    }
     const c = A.conn;
     if (!c) return;
-    // the nearest opposite-side port in range: the ring and arc show from ELEC_PX, a release connects within SNAP_PX
+    // the nearest opposite-side port in range: the ring and arc show within reach, and a release there connects
     let best: { node: AssetNode; idx: number } | null = null;
-    let bd = ELEC_PX / s;
+    const reach = Math.min(ELEC_PX / s, REACH_WORLD);
+    let bd = reach; // distance used for the arc's intensity
+    let bRank = 3; // 0: a port in reach, 1: only the card is under the cursor (or its margin)
+    let bNd = Infinity;
+    const m = CARD_MARGIN_PX / s;
     for (const o of vis) {
       if (o === c.from) continue;
       const arr = c.dir > 0 ? o.ins : o.outs;
       const ox = c.dir > 0 ? o.x : o.x + o.w;
-      const m = CARD_MARGIN_PX / s;
-      const inCard =
-        c.x >= o.x - m &&
-        c.x <= o.x + o.w + m &&
-        c.y >= o.y - m &&
-        c.y <= o.y + o.h + m;
       let nk = -1;
       let nd = Infinity;
       for (let k = 0; k < arr.length; k++) {
@@ -386,27 +422,29 @@ export class Interaction {
         }
       }
       if (nk < 0) continue;
-      if (inCard) {
-        // dropped on a card: it takes the nearest port
-        best = { node: o, idx: nk };
-        bd = 0;
-        break;
-      }
-      if (nd < bd) {
-        bd = nd;
-        best = { node: o, idx: nk };
-      }
+      // the nearest port in reach wins, even if the cursor is still over another card; a card with no port in reach
+      // still takes a drop on it (or its margin)
+      const touching =
+        c.x >= o.x - m &&
+        c.x <= o.x + o.w + m &&
+        c.y >= o.y - m &&
+        c.y <= o.y + o.h + m;
+      const rank = nd < reach ? 0 : touching ? 1 : 3;
+      if (rank === 3 || rank > bRank || (rank === bRank && nd >= bNd)) continue;
+      bRank = rank;
+      bNd = nd;
+      bd = rank === 0 ? nd : 0;
+      best = { node: o, idx: nk };
     }
     c.near = best;
-    c.elec = best ? 1 - (bd * s) / ELEC_PX : 0;
-    c.target = best && bd * s <= SNAP_PX ? best : null;
-    const m = best ? Math.max(0, 1 - (bd * s) / MAG_PX) : 0; // magnet: the tip is drawn toward the port, easing in
+    c.elec = best ? 1 - bd / reach : 0;
+    c.target = best ? best : null; // anywhere the arc shows, letting go connects
     if (best)
       c.pt = {
         x: best.node.x + (c.dir > 0 ? 0 : best.node.w),
         y: portY(best.node, best.idx),
       };
-    c.snap = !!best && bd <= ringR(s);
-    c.pull += ((c.snap ? 1 : MAG_PULL * m * m * (3 - 2 * m)) - c.pull) * 0.3;
+    c.snap = false; // no magnet and no lock-on: the tip stays under the cursor and the arc keeps crackling
+    c.pull += (0 - c.pull) * 0.3;
   }
 }

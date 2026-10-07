@@ -114,7 +114,10 @@ export default class GraphConnectDialog extends Component<GraphConnectDialogSign
     void (this.ingress = (e.target as HTMLSelectElement).value);
   setMode = (e: Event): void =>
     void (this.mode = (e.target as HTMLSelectElement).value as Mode);
-  close = (): void => void (this.request = null);
+  close = (): void => {
+    this.args.handle?.cancelGroupConnect();
+    this.request = null;
+  };
   connect = (): void => {
     const specs = this.plan.specs;
     if (this.args.onConnect) this.args.onConnect(specs);

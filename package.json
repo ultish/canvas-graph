@@ -1,6 +1,6 @@
 {
   "name": "canvas-graph",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A canvas topology graph for Ember: thousands of assets, fat pipes when zoomed out, named ports and animated wiring when zoomed in. No GPU needed.",
   "keywords": [
     "ember-addon",

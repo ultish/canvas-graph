@@ -30,6 +30,11 @@ export interface GroupDrag {
   y: number;
   target: Group | null;
   pull: number;
+  /** The nearest opposite-side handle in range (the ring and arc show), and how close: 0 far, 1 touching. */
+  near: Group | null;
+  elec: number;
+  snap: boolean;
+  pt: Point | null;
 }
 
 /** Transient, purely visual state that the engine, the interaction layer and the renderer share. */
@@ -44,6 +49,10 @@ export interface AnimState {
     dir: 1 | -1;
     idx: number;
   } | null;
+  /** Assets the user is searching for: ringed and named on the canvas, wherever they are. */
+  found: Set<AssetNode>;
+  /** A group-to-group link the user has drawn but not yet answered: shown until the dialog is cancelled or data arrives. */
+  groupDraft: { a: Group; b: Group } | null;
   ghost: { segs: Cubic[]; type: string; t0: number } | null;
   bumping: Set<AssetNode>;
   /** Assets the host's data just changed: they wear a fading ring for a moment. */
@@ -60,6 +69,8 @@ export const createAnimState = (): AnimState => ({
   gconn: null,
   retract: null,
   flash: null,
+  found: new Set(),
+  groupDraft: null,
   ghost: null,
   bumping: new Set(),
   pulsing: new Set(),

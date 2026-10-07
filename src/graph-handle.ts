@@ -90,6 +90,21 @@ export class GraphHandle {
     return this.engine.requestDisconnect(edges, 'api');
   }
 
+  /** Ring and name these assets on the canvas without moving or hiding anything; `[]` clears it. */
+  highlightAssets(ids: readonly string[]): void {
+    this.engine.setFound(ids);
+  }
+
+  /** The ids, among `ids`, whose name contains `text` (case-insensitive). */
+  findAssets(ids: readonly string[], text: string): string[] {
+    return this.engine.findAssets(ids, text);
+  }
+
+  /** Remove the temporary link shown after a group drag (call it if you cancel your own connect UI). */
+  cancelGroupConnect(): void {
+    this.engine.cancelGroupConnect();
+  }
+
   /** Your answer when a request handler returned nothing: it worked. */
   confirm(ids: string | readonly string[]): void {
     this.engine.confirm(ids);

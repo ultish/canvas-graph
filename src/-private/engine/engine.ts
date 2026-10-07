@@ -412,7 +412,28 @@ export class GraphEngine {
 
   // ---------------------------------------------------------------- selection
 
+  /** Ring and name these assets on the canvas (a search result). Nothing moves or hides; an empty list clears it. */
+  setFound(ids: readonly string[]): void {
+    const f = this.anim.found;
+    f.clear();
+    for (const id of ids) {
+      const n = this.store.assets.get(id);
+      if (n) f.add(n);
+    }
+    this.invalidate();
+  }
+
+  /** Assets of these ids (a group's) whose name contains the text, case-insensitively. */
+  findAssets(ids: readonly string[], text: string): string[] {
+    const q = text.trim().toLowerCase();
+    if (!q) return [];
+    return ids.filter((id) =>
+      this.store.assets.get(id)?.name.toLowerCase().includes(q),
+    );
+  }
+
   select(sel: SelectionInput): void {
+    this.anim.found.clear();
     this.selected = sel?.node ?? null;
     this.selEdge = sel?.edge ?? null;
     this.selGE = sel?.ge ?? null;
@@ -520,6 +541,18 @@ export class GraphEngine {
         if (c.target && !alive(c.target.node)) c.target = null;
       }
     }
+    for (const n of A.found) if (!alive(n)) A.found.delete(n);
+    const d = A.groupDraft;
+    if (d) {
+      const a = gOf(d.a);
+      const b = gOf(d.b);
+      if (!a || !b || this.gedges.some((x) => x.a === a && x.b === b))
+        A.groupDraft = null; // a group is gone, or the real link has arrived and takes over
+      else {
+        d.a = a;
+        d.b = b;
+      }
+    }
     const r = A.retract;
     if (r && !alive(r.from)) A.retract = null;
     const g = A.gconn;
@@ -587,6 +620,8 @@ export class GraphEngine {
   /** Zoomed out: the user dragged one group onto another. Nothing is drawn; the host decides the pairings. */
   requestGroupConnect(src: Group, dst: Group): void {
     const ge = this.gedges.find((x) => x.a === src && x.b === dst);
+    this.anim.groupDraft = ge ? null : { a: src, b: dst };
+    this.invalidate();
     this.emitter.emit('connectRequest', {
       source: 'group-drag',
       from: groupSide(src),
@@ -594,6 +629,13 @@ export class GraphEngine {
       cardinality: cardinality(src.nodes.length, dst.nodes.length),
       existingLinks: ge ? ge.edges.length : 0,
     });
+  }
+
+  /** Drop the temporary group link (the user cancelled the connect dialog). */
+  cancelGroupConnect(): void {
+    if (!this.anim.groupDraft) return;
+    this.anim.groupDraft = null;
+    this.invalidate();
   }
 
   private askConnect(edges: Edge[], req: ConnectRequest): void {

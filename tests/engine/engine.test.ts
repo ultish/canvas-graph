@@ -548,7 +548,18 @@ describe('drags survive the model changing under them', () => {
     const e = boot(input);
     const from = node(e, 'sw').g!;
     const target = node(e, 'p4').g!;
-    e.anim.gconn = { from, dir: 1, x: 0, y: 0, target, pull: 0 };
+    e.anim.gconn = {
+      from,
+      dir: 1,
+      x: 0,
+      y: 0,
+      target,
+      pull: 0,
+      near: null,
+      elec: 0,
+      snap: false,
+      pt: null,
+    };
     e.sync({
       ...input,
       assets: [...input.assets, asset('new-sink', 'sink', ['1'], [])],
@@ -569,6 +580,10 @@ describe('drags survive the model changing under them', () => {
       y: 0,
       target: null,
       pull: 0,
+      near: null,
+      elec: 0,
+      snap: false,
+      pt: null,
     };
     e.sync({
       assets: input.assets.filter((a) => a.id !== 'sw'),

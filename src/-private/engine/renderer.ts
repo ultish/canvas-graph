@@ -191,6 +191,7 @@ export class Renderer {
     this.beforeDraw?.(vis);
 
     this.drawGroups(1 - 0.75 * smooth(0.4, 0.8, s), 1 - smooth(0.35, 0.6, s));
+    if (eng.anim.groupDraft) this.drawGroupDraft(1 - smooth(0.35, 0.6, s));
     if (eng.anim.gconn) this.drawGroupDrag();
     this.wires = 0;
     if (midA > 0.01) this.drawMembers(vis, midA);
@@ -200,6 +201,7 @@ export class Renderer {
       this.drawTransients();
     }
     if (eng.anim.pulsing.size) this.drawPulses(vis, Math.max(midA, nearA));
+    if (eng.anim.found.size) this.drawFound();
     this.stats = {
       mode: nearA > 0.5 ? 'NEAR' : s >= 0.07 ? 'MID' : 'FAR',
       scale: s,
@@ -354,6 +356,70 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
+  /** Electricity: a jagged arc bridges the gap from a wire's tip to the handle it is reaching for. */
+  private drawArc(
+    ex: number,
+    ey: number,
+    tx: number,
+    ty: number,
+    elec: number,
+    col: string,
+    lw: number,
+  ): void {
+    const { ctx, engine: eng } = this;
+    const s = eng.viewport.s;
+    const dx = tx - ex;
+    const dy = ty - ey;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const segs = Math.max(6, Math.min(40, Math.round((len * s) / 5)));
+    const amp = (3 + 6 * elec) / s;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    for (let i = 1; i < segs; i++) {
+      const u = i / segs;
+      const o = (Math.random() * 2 - 1) * amp * Math.sin(Math.PI * u) * 1.4;
+      ctx.lineTo(ex + dx * u + nx * o, ey + dy * u + ny * o);
+    }
+    ctx.lineTo(tx, ty);
+    ctx.globalAlpha = 0.45;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = lw * 4;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = lw * 1.1;
+    ctx.stroke();
+  }
+
+  /** The dotted pipe left behind by a group drag while its connect dialog is open. */
+  private drawGroupDraft(alpha: number): void {
+    const { ctx, engine: eng } = this;
+    const { a, b } = eng.anim.groupDraft!;
+    const s = eng.viewport.s;
+    ctx.lineCap = 'round';
+    const lw = pipePx(a.nodes.length) / s;
+    ctx.setLineDash([0.01, lw * 1.8]); // round dots: disabled wires are long dashes
+    ctx.globalAlpha = alpha * 0.9;
+    ctx.strokeStyle = this.c(a.type);
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    strokeSegs(
+      ctx,
+      groupEdgeSegs({
+        a,
+        b,
+        count: 0,
+        back: false,
+        skip: false,
+        laneY: undefined,
+        edges: [],
+      }),
+    );
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   /** The fat pipe following the cursor from a group handle; locks onto the target group's facing handle. */
   private drawGroupDrag(): void {
     const { ctx, engine: eng } = this;
@@ -365,12 +431,33 @@ export class Renderer {
     const hy = g.y + g.h / 2;
     let ex = c.x;
     let ey = c.y;
+    ctx.lineWidth = 2 / s;
+    ctx.strokeStyle = col;
+    for (const o of eng.groups) {
+      if (o === g) continue;
+      const hot = c.near === o;
+      ctx.globalAlpha = hot ? 1 : 0.3 + 0.25 * Math.sin(eng.time * 6);
+      ctx.beginPath();
+      ctx.arc(
+        c.dir > 0 ? o.x - PAD : o.x + o.w + PAD,
+        o.y + o.h / 2,
+        hot
+          ? ringR(s) + (2 / s) * Math.sin(eng.time * 10)
+          : Math.max(11, 13 / s),
+        0,
+        6.3,
+      );
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    if (c.pull > 0.003 && c.pt) {
+      ex += (c.pt.x - ex) * c.pull;
+      ey += (c.pt.y - ey) * c.pull;
+    }
     if (c.target) {
       const t = c.target;
       const tx = c.dir > 0 ? t.x - PAD : t.x + t.w + PAD;
       const ty = t.y + t.h / 2;
-      ex += (tx - ex) * c.pull;
-      ey += (ty - ey) * c.pull;
       ctx.strokeStyle = col;
       ctx.lineWidth = 3 / s;
       ctx.globalAlpha = 0.9;
@@ -407,6 +494,8 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(ex, ey, 7 / s, 0, 6.3);
     ctx.fill();
+    if (c.near && c.pt && !c.snap)
+      this.drawArc(ex, ey, c.pt.x, c.pt.y, c.elec, col, lw);
     ctx.globalAlpha = 1;
   }
 
@@ -449,6 +538,41 @@ export class Renderer {
       );
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Search hits: a steady ring (bigger when zoomed out so it stays visible) and, for a handful, the name. */
+  private drawFound(): void {
+    const { ctx, engine: eng } = this;
+    const s = eng.viewport.s;
+    const b = eng.viewport.bounds();
+    const named = eng.anim.found.size <= 40;
+    const pulse = 0.75 + 0.25 * Math.sin(eng.time * 5);
+    const grow = 5 / s;
+    ctx.strokeStyle = this.theme.highlight;
+    ctx.fillStyle = this.theme.highlight;
+    ctx.lineWidth = Math.max(2.5 / s, 3);
+    ctx.font = `600 ${13 / s}px ${FONT}`;
+    ctx.textAlign = 'center';
+    for (const n of eng.anim.found) {
+      if (n.x > b.x1 || n.y > b.y1 || n.x + n.w < b.x0 || n.y + n.h < b.y0)
+        continue;
+      ctx.globalAlpha = pulse;
+      ctx.beginPath();
+      ctx.roundRect(
+        n.x - grow,
+        n.y - grow,
+        n.w + 2 * grow,
+        n.h + 2 * grow,
+        14 + grow,
+      );
+      ctx.stroke();
+      if (named) {
+        ctx.globalAlpha = 1;
+        ctx.fillText(n.name, n.x + n.w / 2, n.y - grow - 6 / s);
+      }
+    }
+    ctx.textAlign = 'left';
     ctx.globalAlpha = 1;
   }
 
@@ -956,32 +1080,16 @@ export class Renderer {
     ctx.arc(ex, ey, 5, 0, 6.3);
     ctx.fill();
     if (conn?.near && !conn.snap) {
-      // electricity: a jagged arc bridges the gap from the wire's tip to the port
       const t = conn.near;
-      const tx = t.node.x + (c.dir > 0 ? 0 : t.node.w);
-      const ty = portY(t.node, t.idx);
-      const dx = tx - ex;
-      const dy = ty - ey;
-      const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len;
-      const ny = dx / len;
-      const segs = Math.max(6, Math.min(40, Math.round((len * s) / 5)));
-      const amp = (3 + 6 * conn.elec) / s;
-      ctx.beginPath();
-      ctx.moveTo(ex, ey);
-      for (let i = 1; i < segs; i++) {
-        const u = i / segs;
-        const o = (Math.random() * 2 - 1) * amp * Math.sin(Math.PI * u) * 1.4;
-        ctx.lineTo(ex + dx * u + nx * o, ey + dy * u + ny * o);
-      }
-      ctx.lineTo(tx, ty);
-      ctx.globalAlpha = 0.45;
-      ctx.strokeStyle = col;
-      ctx.lineWidth = lw * 4;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = lw * 1.1;
-      ctx.stroke();
+      this.drawArc(
+        ex,
+        ey,
+        t.node.x + (c.dir > 0 ? 0 : t.node.w),
+        portY(t.node, t.idx),
+        conn.elec,
+        col,
+        lw,
+      );
     }
     ctx.globalAlpha = 1;
   }
