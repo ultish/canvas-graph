@@ -1,0 +1,219 @@
+/*
+ * Headless by default: the canvas draws itself. This file styles only the optional inspector and connect dialog.
+ *
+ * Theming: every colour is a CSS custom property with a dark default. Set them on :root, on [data-theme], or on any
+ * wrapper (they inherit). The canvas reads its own set (--cg-bg, --cg-card, ...; see the README) from the same place,
+ * so one mapping themes both. With DaisyUI, for instance:  --cg-bg: var(--color-base-100);
+ *
+ *   panels:   --cg-panel-bg --cg-panel-border --cg-panel-rule --cg-panel-text --cg-panel-title --cg-panel-muted
+ *   controls: --cg-control-bg --cg-control-border --cg-control-text
+ *   actions:  --cg-danger --cg-danger-bg --cg-danger-border   --cg-ok-text --cg-ok-bg --cg-ok-border
+ */
+.cg-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  overflow: hidden;
+}
+
+.cg-panel {
+  box-sizing: border-box;
+  width: 272px;
+  padding: 12px 14px;
+  border: 1px solid var(--cg-panel-border, #262630);
+  border-radius: 10px;
+  background: var(--cg-panel-bg, #14141aee);
+  color: var(--cg-panel-text, #c4c4d0);
+  font:
+    13px -apple-system,
+    system-ui,
+    sans-serif;
+}
+
+.cg-panel__title {
+  margin-bottom: 8px;
+  color: var(--cg-panel-title, #f1f1f6);
+  font-weight: 600;
+}
+
+.cg-panel__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-top: 1px solid var(--cg-panel-rule, #1f1f28);
+}
+
+.cg-panel__row > span {
+  color: var(--cg-panel-muted, #6d6d7a);
+  white-space: nowrap;
+}
+
+.cg-panel__row > b {
+  font-weight: 500;
+  text-align: right;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+.cg-panel select {
+  max-width: 150px;
+  padding: 3px 6px;
+  border: 1px solid var(--cg-control-border, #2a2a36);
+  border-radius: 6px;
+  background: var(--cg-control-bg, #1a1a22);
+  color: var(--cg-control-text, #e6e6ee);
+}
+
+.cg-panel__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.cg-panel button {
+  padding: 8px;
+  border: 1px solid var(--cg-control-border, #2a2a36);
+  border-radius: 8px;
+  background: var(--cg-control-bg, #1a1a22);
+  color: var(--cg-control-text, #c4c4d0);
+  font:
+    600 13px -apple-system,
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+}
+
+.cg-panel button[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cg-panel button.cg-danger {
+  border-color: var(--cg-danger-border, #5a2630);
+  background: var(--cg-danger-bg, #2a1519);
+  color: var(--cg-danger, #ff8a98);
+}
+
+.cg-panel button.cg-ok {
+  border-color: var(--cg-ok-border, #1f5a3a);
+  background: var(--cg-ok-bg, #12261b);
+  color: var(--cg-ok-text, #7de08a);
+}
+
+.cg-search {
+  position: relative;
+  display: inline-block;
+}
+
+.cg-search__input {
+  width: 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--cg-control-border, #2a2a36);
+  border-radius: 6px;
+  background: var(--cg-control-bg, #1a1a22);
+  color: var(--cg-control-text, #e6e6ee);
+  font: inherit;
+}
+
+.cg-search__list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  max-height: 320px;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--cg-control-border, #2a2a36);
+  border-radius: 8px;
+  background: var(--cg-panel-bg, #14141aee);
+  color: var(--cg-panel-text, #c4c4d0);
+  box-shadow: 0 8px 24px #0006;
+}
+
+.cg-search__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cg-search__item.is-active,
+.cg-search__item:hover {
+  background: var(--cg-control-bg, #1a1a22);
+  color: var(--cg-panel-title, #f1f1f6);
+}
+
+.cg-search__item small,
+.cg-search__none {
+  color: var(--cg-panel-muted, #6d6d7a);
+}
+
+.cg-search__none {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.cg-search__box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 320px;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid var(--cg-control-border, #2a2a36);
+  border-radius: 6px;
+  background: var(--cg-control-bg, #1a1a22);
+}
+
+.cg-search__box:focus-within {
+  border-color: var(--cg-highlight, #fff);
+}
+
+.cg-search__box .cg-search__input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  outline: none;
+}
+
+.cg-search__chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px 1px 8px;
+  border-radius: 999px;
+  background: var(--cg-panel-rule, #1f1f28);
+  color: var(--cg-panel-title, #f1f1f6);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cg-search__chip button {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--cg-panel-muted, #6d6d7a);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cg-search__chip button:hover {
+  color: var(--cg-panel-title, #f1f1f6);
+}

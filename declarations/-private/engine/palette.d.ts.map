@@ -1,0 +1,1 @@
+{"version":3,"file":"palette.d.ts","sourceRoot":"","sources":["../../../src/-private/engine/palette.ts"],"names":[],"mappings":"AAmBA,qBAAa,OAAO;IAEN,OAAO,CAAC,SAAS;IAD7B,OAAO,CAAC,KAAK,CAA6B;gBACtB,SAAS,GAAE,MAAM,CAAC,MAAM,EAAE,MAAM,CAAM;IAE1D,KAAK,CAAC,IAAI,EAAE,MAAM,GAAG,MAAM;IAe3B,YAAY,CAAC,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,MAAM,CAAC,GAAG,IAAI;CAI9C"}
