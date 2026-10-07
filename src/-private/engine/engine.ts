@@ -225,6 +225,10 @@ export class GraphEngine {
 
   sync(input: GraphInput): SyncResult {
     const res = this.store.sync(input);
+    for (const [localId, realId] of res.promoted) {
+      const real = this.store.edgesById.get(realId);
+      if (real && this.anim.flash?.e.id === localId) this.anim.flash.e = real;
+    }
     if (!this.laidOut || res.structural) this.relayout('sync');
     else if (res.routing)
       this.reroute({ added: res.addedEdges, removed: res.removedEdges });
@@ -292,11 +296,22 @@ export class GraphEngine {
     this.comps = r.comps;
     this.router.rebuild(this.store.edgeList, this.comps);
     this.grid.rebuild(this.store.nodes); // at the final positions
+    const bumps = [...this.anim.bumping].map(
+      (n) => [n, n.bt, n.bside, n.bpush] as const,
+    );
     for (const n of this.store.nodes) {
       n.x0 = undefined;
       n.bt = null;
     }
     this.anim.bumping.clear();
+    for (const [n, bt, side, push] of bumps) {
+      if (!this.store.nodes.includes(n) || bt == null) continue;
+      n.x0 = n.x;
+      n.bt = bt;
+      n.bside = side;
+      n.bpush = push;
+      this.anim.bumping.add(n);
+    }
     if (animate && fromPos && oldGeom)
       this.startTween(before, fromPos, oldGeom);
     this.laidOut = true;
